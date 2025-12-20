@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>My Media Library</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: system-ui, sans-serif; background:#0f0f0f; color:#fff; margin:0; padding:1rem; }
+    h2 { margin: .25rem 0 1rem; }
+    .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; }
+    input, select { padding:.6rem; border-radius:10px; border:none; font-size:1rem; }
+    input { flex: 2; min-width: 180px; }
+    select { flex: 1; min-width: 140px; }
+    button { padding:.6rem .9rem; border-radius:10px; border:0; font-size:1rem; }
+    #scanBtn { background:#4caf50; color:#000; }
+    #refreshBtn { background:#1e88e5; color:#fff; }
+    .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
+
+    .item { background:#1c1c1c; padding:.85rem; border-radius:12px; margin-bottom:.6rem; }
+    .title { font-weight:650; font-size: 1.02rem; margin-bottom: .15rem; }
+    .meta { color:#aaa; font-size:.88rem; margin-bottom: .6rem; }
+    .actions { display:flex; gap:.5rem; }
+    .actions button { font-size:.95rem; padding:.5rem .75rem; }
+    .edit { background:#ffb300; color:#000; }
+    .del { background:#ef5350; color:#fff; }
+
+    .empty { color:#777; text-align:center; margin-top:2rem; }
+
+    /* Modal */
+    .modalBackdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      display:none; align-items:center; justify-content:center; padding:1rem;
+    }
+    .modal {
+      width: 100%; max-width: 560px;
+      background:#1c1c1c; border-radius:14px; padding:1rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,.5);
+    }
+    .modal h3 { margin: 0 0 .75rem; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:.6rem; }
+    .grid label { font-size:.9rem; color:#bbb; }
+    .grid input, .grid textarea, .grid select { width:100%; box-sizing:border-box; }
+    textarea { min-height: 90px; resize: vertical; }
+    .modalActions { display:flex; gap:.5rem; justify-content:flex-end; margin-top: .8rem; }
+    .save { background:#4caf50; color:#000; }
+    .cancel { background:#444; color:#fff; }
+    .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
+  </style>
+</head>
+
+<body>
+  <h2>📚 My Library <span id="net" class="pill">…</span> <span id="cache" class="pill">cache: 0</span></h2>
+
+  <div class="top">
+    <input id="search" type="search" placeholder="Search title…" />
+    <select id="filter">
+      <option value="">All</option>
+      <option value="book">Books</option>
+      <option value="movie">Movies</option>
+      <option value="game">Games</option>
+      <option value="unknown">Unknown</option>
+    </select>
+    <button id="refreshBtn">Refresh</button>
+    <button id="scanBtn" onclick="location.href='/ui/scan.html'">Scan</button>
+  </div>
+
+  <div id="list"></div>
+
+  <!-- Edit Modal -->
+  <div id="backdrop" class="modalBackdrop">
+    <div class="modal">
+      <h3>Edit Item</h3>
+      <div class="grid">
+        <div>
+          <label>Title</label>
+          <input id="mTitle" />
+        </div>
+        <div>
+          <label>Media type</label>
+          <select id="mType">
+            <option value="book">book</option>
+            <option value="movie">movie</option>
+            <option value="game">game</option>
+            <option value="unknown">unknown</option>
+          </select>
+        </div>
+        <div>
+          <label>Notes</label>
+          <textarea id="mNotes" placeholder="Optional notes…"></textarea>
+        </div>
+        <div class="note" id="mMeta"></div>
+      </div>
+      <div class="modalActions">
+        <button class="cancel" id="cancelBtn">Cancel</button>
+        <button class="save" id="saveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const CACHE_KEY = "mediaLibrary.mediaCache.v1";
+
+    const listEl = document.getElementById("list");
+    const searchEl = document.getElementById("search");
+    const filterEl = document.getElementById("filter");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const netEl = document.getElementById("net");
+    const cachePill = document.getElementById("cache");
+
+    const backdrop = document.getElementById("backdrop");
+    const mTitle = document.getElementById("mTitle");
+    const mType = document.getElementById("mType");
+    const mNotes = document.getElementById("mNotes");
+    const mMeta = document.getElementById("mMeta");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const saveBtn = document.getElementById("saveBtn");
+
+    let currentItems = [];
+    let editingItem = null;
+
+    function updateNet() {
+      netEl.textContent = navigator.onLine ? "online" : "offline";
+    }
+
+    function saveCache(items) {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), items }));
+        cachePill.textContent = `cache: ${items.length}`;
+      } catch {}
+    }
+
+    function loadCache() {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.items)) return null;
+        cachePill.textContent = `cache: ${parsed.items.length}`;
+        return parsed.items;
+      } catch {
+        return null;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function render(items) {
+      listEl.innerHTML = "";
+      if (!items || !items.length) {
+        listEl.innerHTML = `<div class="empty">No media found</div>`;
+        return;
+      }
+
+      for (const item of items) {
+        const div = document.createElement("div");
+        div.className = "item";
+
+        div.innerHTML = `
+          <div class="title">${escapeHtml(item.title)}</div>
+          <div class="meta">${escapeHtml(item.media_type ?? "unknown")} • ${escapeHtml(item.barcode)} • id:${item.id}</div>
+          <div class="actions">
+            <button class="edit">Edit</button>
+            <button class="del">Delete</button>
+          </div>
+        `;
+
+        div.querySelector(".edit").addEventListener("click", () => openEdit(item.id));
+        div.querySelector(".del").addEventListener("click", () => doDelete(item.id));
+
+        listEl.appendChild(div);
+      }
+    }
+
+    function applyLocalFilter(items) {
+      const q = (searchEl.value || "").trim().toLowerCase();
+      const t = filterEl.value;
+
+      return items.filter(i => {
+        const matchText = !q || String(i.title ?? "").toLowerCase().includes(q);
+        const matchType = !t || String(i.media_type ?? "unknown") === t;
+        return matchText && matchType;
+      });
+    }
+
+    async function fetchMediaNetwork() {
+      const params = new URLSearchParams();
+      // we can still let server filter, but we also do client filtering for offline
+      if (filterEl.value) params.set("media_type", filterEl.value);
+      if (searchEl.value) params.set("search", searchEl.value);
+
+      const resp = await fetch("/media?" + params.toString());
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      return await resp.json();
+    }
+
+    async function load({ preferNetwork = true } = {}) {
+      updateNet();
+
+      // Always show something fast: cached items filtered locally
+      const cached = loadCache();
+      if (cached) {
+        currentItems = cached;
+        render(applyLocalFilter(cached));
+      }
+
+      if (!preferNetwork || !navigator.onLine) return;
+
+      try {
+        const items = await fetchMediaNetwork();
+        // Keep full list in cache (not just filtered)
+        currentItems = items;
+        saveCache(items);
+        render(items); // server-filtered view
+      } catch (e) {
+        // if network fails, stick with cached view
+        console.log("load failed:", e);
+      }
+    }
+
+    function openEdit(id) {
+      const item = currentItems.find(x => x.id === id);
+      if (!item) return;
+
+      editingItem = item;
+
+      mTitle.value = item.title ?? "";
+      mType.value = item.media_type ?? "unknown";
+      mNotes.value = item.notes ?? "";
+      mMeta.textContent = `barcode: ${item.barcode} • added: ${item.added_at || "?"} • updated: ${item.updated_at || "—"}`;
+
+      backdrop.style.display = "flex";
+    }
+
+    function closeEdit() {
+      backdrop.style.display = "none";
+      editingItem = null;
+    }
+
+    async function saveEdit() {
+      if (!editingItem) return;
+
+      const patch = {
+        title: mTitle.value,
+        media_type: mType.value,
+        notes: mNotes.value
+      };
+
+      try {
+        const resp = await fetch(`/media/${editingItem.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch)
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+        const data = await resp.json();
+        // update local cache list
+        const updated = data.item;
+        currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
+        saveCache(currentItems);
+        render(applyLocalFilter(currentItems));
+        closeEdit();
+      } catch (e) {
+        alert("Update failed: " + e);
+      }
+    }
+
+    async function doDelete(id) {
+      const item = currentItems.find(x => x.id === id);
+      const label = item ? `${item.title} (${item.barcode})` : `id ${id}`;
+      if (!confirm("Delete " + label + "?")) return;
+
+      try {
+        const resp = await fetch(`/media/${id}`, { method: "DELETE" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+        currentItems = currentItems.filter(x => x.id !== id);
+        saveCache(currentItems);
+        render(applyLocalFilter(currentItems));
+      } catch (e) {
+        alert("Delete failed: " + e);
+      }
+    }
+
+    // Events
+    cancelBtn.addEventListener("click", closeEdit);
+    saveBtn.addEventListener("click", saveEdit);
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeEdit(); });
+
+    refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
+    searchEl.addEventListener("input", () => load({ preferNetwork: false }));
+    filterEl.addEventListener("change", () => load({ preferNetwork: true }));
+
+    window.addEventListener("online", () => load({ preferNetwork: true }));
+    window.addEventListener("offline", updateNet);
+
+    // Service worker for offline-first UI assets
+    (function registerSW() {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
+      }
+    })();
+
+    // init
+    updateNet();
+    load({ preferNetwork: true });
+  </script>
+</body>
+</html>

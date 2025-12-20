@@ -1,0 +1,11 @@
+services:
+  media-library:
+    build: .
+    container_name: media-library
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      BARCODELOOKUP_API_KEY: wv8hyvk5ff5565ow0tmrxsbhkbxckf

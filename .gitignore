@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+
+# Local data / databases
+data/
+*.db
+
+# Env / secrets
+.env
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
+
+# Docker artifacts
+*.log

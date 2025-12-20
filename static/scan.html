@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Scan Media</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { font-family: system-ui, sans-serif; background:#111; color:#fff; padding:1rem; text-align:center; }
+    video { width:100%; max-width:520px; border-radius:12px; margin-top:1rem; background:#000; }
+    .row { display:flex; gap:.5rem; justify-content:center; flex-wrap:wrap; margin-top:.75rem; }
+    button { font-size:1.05rem; padding:.7rem 1rem; border-radius:10px; border:0; }
+    #start { background:#4caf50; color:#000; }
+    #stop { background:#ffb300; color:#000; display:none; }
+    #library { background:#1e88e5; color:#fff; }
+    .card { background:#1c1c1c; padding:1rem; border-radius:12px; margin:1rem auto 0; max-width:520px; text-align:left; }
+    .muted { color:#aaa; }
+    .ok { color:#8bc34a; }
+    .err { color:#ef5350; }
+    pre { white-space:pre-wrap; word-break:break-word; margin:.25rem 0 0; color:#d7d7d7; }
+    .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
+  </style>
+</head>
+
+<body>
+  <h2>📷 Scan Barcode</h2>
+
+  <div class="row">
+    <button id="start">Start Camera</button>
+    <button id="stop">Stop Camera</button>
+    <button id="library" onclick="location.href='/ui/library.html'">View Library</button>
+  </div>
+
+  <video id="video" playsinline></video>
+
+  <div class="card">
+    <div><strong>Status:</strong> <span id="status" class="muted">Loading…</span>
+      <span id="net" class="pill">…</span>
+      <span id="q" class="pill">queue: 0</span>
+    </div>
+
+    <div style="margin-top:.5rem;"><strong>Last barcode:</strong> <span id="lastBarcode" class="muted">—</span></div>
+
+    <div style="margin-top:.75rem;"><strong>Server response:</strong></div>
+    <pre id="serverResp" class="muted">—</pre>
+
+    <div style="margin-top:.75rem;"><strong>Errors:</strong></div>
+    <pre id="errors" class="muted">—</pre>
+  </div>
+
+  <script src="/ui/zxing.min.js"></script>
+  <script>
+    // ---- Offline queue ----
+    const QUEUE_KEY = "mediaLibrary.scanQueue.v1";
+
+    function getQueue() {
+      try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); }
+      catch { return []; }
+    }
+    function setQueue(q) {
+      localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
+      updateQueuePill();
+    }
+    function enqueue(barcode) {
+      const q = getQueue();
+      q.push({ barcode, ts: Date.now() });
+      setQueue(q);
+    }
+    async function flushQueue() {
+      const q = getQueue();
+      if (!q.length) return;
+
+      setStatus(`Flushing ${q.length} queued scan(s)…`, "muted");
+      let remaining = [];
+
+      for (const item of q) {
+        try {
+          const resp = await fetch("/scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ barcode: item.barcode })
+          });
+          if (!resp.ok) remaining.push(item);
+        } catch {
+          remaining.push(item);
+        }
+      }
+      setQueue(remaining);
+      setStatus(remaining.length ? "Some queued scans still pending" : "Queued scans flushed", remaining.length ? "err" : "ok");
+    }
+
+    // ---- UI helpers ----
+    const startBtn = document.getElementById("start");
+    const stopBtn = document.getElementById("stop");
+    const video = document.getElementById("video");
+
+    const statusEl = document.getElementById("status");
+    const lastBarcodeEl = document.getElementById("lastBarcode");
+    const serverRespEl = document.getElementById("serverResp");
+    const errorsEl = document.getElementById("errors");
+    const netEl = document.getElementById("net");
+    const qEl = document.getElementById("q");
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || "muted";
+    }
+    function setError(msg) {
+      errorsEl.textContent = msg || "—";
+      errorsEl.className = msg ? "err" : "muted";
+    }
+    function setServerResp(obj, ok=true) {
+      serverRespEl.textContent = obj ? JSON.stringify(obj, null, 2) : "—";
+      serverRespEl.className = obj ? (ok ? "ok" : "err") : "muted";
+    }
+    function updateNetPill() {
+      netEl.textContent = navigator.onLine ? "online" : "offline";
+      netEl.style.opacity = "1";
+    }
+    function updateQueuePill() {
+      const q = getQueue();
+      qEl.textContent = `queue: ${q.length}`;
+    }
+
+    // ---- Scanner state ----
+    let stream = null;
+    let scanning = false;
+    let reader = null;
+
+    // debounce duplicates
+    let lastSent = null;
+    let lastSentAt = 0;
+
+    function stopCamera() {
+      scanning = false;
+      try { if (reader) reader.reset(); } catch {}
+      reader = null;
+
+      if (stream) {
+        try { stream.getTracks().forEach(t => t.stop()); } catch {}
+      }
+      stream = null;
+
+      stopBtn.style.display = "none";
+      startBtn.style.display = "inline-block";
+      setStatus("Stopped", "muted");
+    }
+
+    async function startCamera() {
+      setError("");
+      setServerResp(null);
+      setStatus("Requesting camera…", "muted");
+
+      if (!window.ZXingBrowser || !window.ZXingBrowser.BrowserMultiFormatReader) {
+        setStatus("Scanner JS not loaded", "err");
+        setError("Could not find ZXingBrowser. Make sure /ui/zxing.min.js exists and loads.");
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = stream;
+        await video.play();
+
+        reader = new ZXingBrowser.BrowserMultiFormatReader();
+        scanning = true;
+
+        startBtn.style.display = "none";
+        stopBtn.style.display = "inline-block";
+        setStatus("Scanning… point at barcode", "ok");
+
+        reader.decodeFromVideoElement(video, async (result) => {
+          if (!result || !scanning) return;
+
+          const barcode = result.getText();
+          const now = Date.now();
+
+          if (barcode === lastSent && (now - lastSentAt) < 2000) return;
+          lastSent = barcode;
+          lastSentAt = now;
+
+          lastBarcodeEl.textContent = barcode;
+          lastBarcodeEl.className = "ok";
+          setStatus("Sending to server…", "muted");
+          setServerResp({ sending: true, barcode });
+
+          // If offline, enqueue immediately
+          if (!navigator.onLine) {
+            enqueue(barcode);
+            setServerResp({ queued: true, barcode, reason: "offline" }, true);
+            setStatus("Queued (offline). Will sync when online.", "err");
+            navigator.vibrate?.(80);
+            return;
+          }
+
+          try {
+            const resp = await fetch("/scan", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ barcode })
+            });
+
+            const text = await resp.text();
+            let json;
+            try { json = JSON.parse(text); } catch { json = { raw: text }; }
+
+            setServerResp({ http_status: resp.status, ...json }, resp.ok);
+            setStatus(resp.ok ? "Saved (or already exists). Keep scanning…" : "Server returned an error", resp.ok ? "ok" : "err");
+            setError("");
+            if (resp.ok) navigator.vibrate?.(120);
+
+          } catch (e) {
+            // Network failure mid-request => queue
+            enqueue(barcode);
+            setStatus("Request failed. Queued for retry.", "err");
+            setError(String(e));
+            setServerResp({ queued: true, barcode, reason: "request_failed", error: String(e) }, false);
+          }
+        });
+
+      } catch (e) {
+        setStatus("Camera failed", "err");
+        setError(String(e));
+      }
+    }
+
+    startBtn.addEventListener("click", startCamera);
+    stopBtn.addEventListener("click", stopCamera);
+
+    // ---- Offline sync triggers ----
+    window.addEventListener("online", () => {
+      updateNetPill();
+      flushQueue();
+    });
+    window.addEventListener("offline", updateNetPill);
+
+    // ---- Service worker (offline-first UI) ----
+    (function registerSW() {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
+      }
+    })();
+
+    // init UI
+    updateNetPill();
+    updateQueuePill();
+    setStatus("Ready. Tap Start Camera.", "muted");
+
+    // attempt a flush on load if online
+    if (navigator.onLine) flushQueue();
+  </script>
+</body>
+</html>

@@ -5,19 +5,62 @@
   <title>Scan Media</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body { font-family: system-ui, sans-serif; background:#111; color:#fff; padding:1rem; text-align:center; }
-    video { width:100%; max-width:520px; border-radius:12px; margin-top:1rem; background:#000; }
-    .row { display:flex; gap:.5rem; justify-content:center; flex-wrap:wrap; margin-top:.75rem; }
-    button { font-size:1.05rem; padding:.7rem 1rem; border-radius:10px; border:0; }
-    #start { background:#4caf50; color:#000; }
-    #stop { background:#ffb300; color:#000; display:none; }
-    #library { background:#1e88e5; color:#fff; }
-    .card { background:#1c1c1c; padding:1rem; border-radius:12px; margin:1rem auto 0; max-width:520px; text-align:left; }
-    .muted { color:#aaa; }
-    .ok { color:#8bc34a; }
-    .err { color:#ef5350; }
-    pre { white-space:pre-wrap; word-break:break-word; margin:.25rem 0 0; color:#d7d7d7; }
-    .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #fff;
+      padding: 1rem;
+      text-align: center;
+    }
+    video {
+      width: 100%;
+      max-width: 520px;
+      border-radius: 12px;
+      margin-top: 1rem;
+      background: #000;
+    }
+    .row {
+      display: flex;
+      gap: .5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: .75rem;
+    }
+    button {
+      font-size: 1.05rem;
+      padding: .7rem 1rem;
+      border-radius: 10px;
+      border: 0;
+    }
+    #start { background: #4caf50; color: #000; }
+    #stop { background: #ffb300; color: #000; display: none; }
+    #library { background: #1e88e5; color: #fff; }
+
+    .card {
+      background: #1c1c1c;
+      padding: 1rem;
+      border-radius: 12px;
+      margin: 1rem auto 0;
+      max-width: 520px;
+      text-align: left;
+    }
+    .muted { color: #aaa; }
+    .ok { color: #8bc34a; }
+    .err { color: #ef5350; }
+
+    .kv { margin-top: .45rem; }
+    .k { font-weight: 650; }
+    .v { margin-left: .25rem; }
+
+    .pill {
+      display: inline-block;
+      padding: .15rem .45rem;
+      border-radius: 999px;
+      background: #2a2a2a;
+      margin-left: .35rem;
+      font-size: .85rem;
+      color: #ddd;
+    }
   </style>
 </head>
 
@@ -33,19 +76,37 @@
   <video id="video" playsinline></video>
 
   <div class="card">
-    <div><strong>Status:</strong> <span id="status" class="muted">Ready</span>
+    <div class="kv">
+      <span class="k">Status:</span>
+      <span id="status" class="v muted">Ready</span>
       <span id="net" class="pill">…</span>
     </div>
 
-    <div style="margin-top:.5rem;"><strong>Last barcode:</strong> <span id="lastBarcode" class="muted">—</span></div>
-
-    <div style="margin-top:.75rem;"><strong>Server response:</strong></div>
-    <pre id="serverResp" class="muted">—</pre>
-
-    <div style="margin-top:.75rem;"><strong>Errors:</strong></div>
-    <pre id="errors" class="muted">—</pre>
+    <div class="kv">
+      <span class="k">Last barcode:</span>
+      <span id="lastBarcode" class="v muted">—</span>
+    </div>
   </div>
 
+  <div class="card">
+    <div class="kv"><span class="k">Server response</span></div>
+
+    <div class="kv"><span class="k">Result:</span><span id="srResult" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Title:</span><span id="srTitle" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Type:</span><span id="srType" class="v muted">—</span></div>
+    <div class="kv"><span class="k">ID:</span><span id="srId" class="v muted">—</span></div>
+
+    <!-- Optional details (same format) -->
+    <div class="kv"><span class="k">Barcode (normalized):</span><span id="srBarcode" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Source:</span><span id="srSource" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Platform:</span><span id="srPlatform" class="v muted">—</span></div>
+  </div>
+
+  <div class="card">
+    <div class="kv"><span class="k">Errors:</span><span id="errors" class="v muted">—</span></div>
+  </div>
+
+  <!-- Local ZXing UMD bundle served from /ui/zxing.min.js -->
   <script src="/ui/zxing.min.js"></script>
   <script>
     const startBtn = document.getElementById("start");
@@ -53,32 +114,53 @@
     const video = document.getElementById("video");
 
     const statusEl = document.getElementById("status");
-    const lastBarcodeEl = document.getElementById("lastBarcode");
-    const serverRespEl = document.getElementById("serverResp");
-    const errorsEl = document.getElementById("errors");
     const netEl = document.getElementById("net");
+    const lastBarcodeEl = document.getElementById("lastBarcode");
+    const errorsEl = document.getElementById("errors");
+
+    const srResult = document.getElementById("srResult");
+    const srTitle = document.getElementById("srTitle");
+    const srType = document.getElementById("srType");
+    const srId = document.getElementById("srId");
+    const srBarcode = document.getElementById("srBarcode");
+    const srSource = document.getElementById("srSource");
+    const srPlatform = document.getElementById("srPlatform");
 
     let stream = null;
     let scanning = false;
     let reader = null;
 
+    // Debounce duplicate scans
     let lastSent = null;
     let lastSentAt = 0;
 
-    function setStatus(text, cls) {
+    function setStatus(text, cls = "muted") {
       statusEl.textContent = text;
-      statusEl.className = cls || "muted";
+      statusEl.className = cls;
     }
-    function setError(msg) {
-      errorsEl.textContent = msg || "—";
-      errorsEl.className = msg ? "err" : "muted";
-    }
-    function setServerResp(obj, ok=true) {
-      serverRespEl.textContent = obj ? JSON.stringify(obj, null, 2) : "—";
-      serverRespEl.className = obj ? (ok ? "ok" : "err") : "muted";
-    }
+
     function updateNet() {
       netEl.textContent = navigator.onLine ? "online" : "offline";
+    }
+
+    function setError(msg) {
+      errorsEl.textContent = msg || "—";
+      errorsEl.className = msg ? "v err" : "v muted";
+    }
+
+    function setText(el, value, okClass = null) {
+      el.textContent = (value === null || value === undefined || value === "") ? "—" : String(value);
+      el.className = "v " + (okClass || "muted");
+    }
+
+    function clearServerResponse() {
+      setText(srResult, "—");
+      setText(srTitle, "—");
+      setText(srType, "—");
+      setText(srId, "—");
+      setText(srBarcode, "—");
+      setText(srSource, "—");
+      setText(srPlatform, "—");
     }
 
     function stopCamera() {
@@ -98,7 +180,7 @@
 
     async function startCamera() {
       setError("");
-      setServerResp(null);
+      clearServerResponse();
       setStatus("Requesting camera…", "muted");
 
       if (!window.ZXingBrowser || !window.ZXingBrowser.BrowserMultiFormatReader) {
@@ -125,14 +207,25 @@
           const barcode = result.getText();
           const now = Date.now();
 
+          // Prevent rapid repeats of the same code
           if (barcode === lastSent && (now - lastSentAt) < 2000) return;
           lastSent = barcode;
           lastSentAt = now;
 
           lastBarcodeEl.textContent = barcode;
-          lastBarcodeEl.className = "ok";
-          setStatus("Sending to server…", "muted");
-          setServerResp({ sending: true, barcode });
+          lastBarcodeEl.className = "v ok";
+
+          setStatus("Saving…", "muted");
+          setError("");
+
+          // Pre-fill response UI (before server response)
+          setText(srResult, "saving…", "muted");
+          setText(srTitle, "—");
+          setText(srType, "—");
+          setText(srId, "—");
+          setText(srBarcode, "—");
+          setText(srSource, "—");
+          setText(srPlatform, "—");
 
           try {
             const resp = await fetch("/scan", {
@@ -142,16 +235,37 @@
             });
 
             const text = await resp.text();
-            let json;
-            try { json = JSON.parse(text); } catch { json = { raw: text }; }
+            let data;
+            try { data = JSON.parse(text); } catch { data = { raw: text }; }
 
-            setServerResp({ http_status: resp.status, ...json }, resp.ok);
-            setStatus(resp.ok ? "Saved (or already exists). Keep scanning…" : "Server error", resp.ok ? "ok" : "err");
-            setError("");
-            if (resp.ok) navigator.vibrate?.(120);
+            if (!resp.ok) {
+              setStatus("Server error", "err");
+              setText(srResult, `error (${resp.status})`, "err");
+              setError(data?.detail || data?.raw || `HTTP ${resp.status}`);
+              return;
+            }
+
+            // Expected FastAPI response shape:
+            // { status, normalized_barcode, item: { id, title, media_type, platform, source, ... } }
+            const resultStatus = data?.status || "ok";
+            const item = data?.item || {};
+
+            setStatus("Saved. Keep scanning…", "ok");
+
+            setText(srResult, resultStatus, resultStatus === "added" ? "ok" : "muted");
+            setText(srTitle, item.title, "ok");
+            setText(srType, item.media_type || "unknown", "muted");
+            setText(srId, item.id, "muted");
+
+            setText(srBarcode, data.normalized_barcode || item.barcode, "muted");
+            setText(srSource, item.source || data?.lookup?.provider || "—", "muted");
+            setText(srPlatform, item.platform || "—", "muted");
+
+            navigator.vibrate?.(120);
 
           } catch (e) {
             setStatus("Failed to reach server", "err");
+            setText(srResult, "network error", "err");
             setError(String(e));
           }
         });
@@ -169,6 +283,7 @@
 
     updateNet();
     setStatus("Ready. Tap Start Camera.", "muted");
+    clearServerResponse();
   </script>
 </body>
 </html>

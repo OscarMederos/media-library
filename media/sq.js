@@ -1,7 +1,4 @@
-// Offline-first service worker (simple, iOS-friendly).
-// Caches UI assets and provides network-first caching for /media.
-
-const CACHE = "media-library-v1";
+const CACHE = "media-library-v2";
 const ASSETS = [
   "/ui/scan.html",
   "/ui/library.html",
@@ -23,15 +20,11 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Cache-first for UI assets under /ui
   if (url.pathname.startsWith("/ui/")) {
-    event.respondWith(
-      caches.match(req).then((cached) => cached || fetch(req))
-    );
+    event.respondWith(caches.match(req).then((cached) => cached || fetch(req)));
     return;
   }
 
-  // Network-first for /media (cache on success, fallback if offline)
   if (url.pathname === "/media") {
     event.respondWith(
       fetch(req)

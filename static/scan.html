@@ -33,9 +33,8 @@
   <video id="video" playsinline></video>
 
   <div class="card">
-    <div><strong>Status:</strong> <span id="status" class="muted">Loading…</span>
+    <div><strong>Status:</strong> <span id="status" class="muted">Ready</span>
       <span id="net" class="pill">…</span>
-      <span id="q" class="pill">queue: 0</span>
     </div>
 
     <div style="margin-top:.5rem;"><strong>Last barcode:</strong> <span id="lastBarcode" class="muted">—</span></div>
@@ -49,46 +48,6 @@
 
   <script src="/ui/zxing.min.js"></script>
   <script>
-    // ---- Offline queue ----
-    const QUEUE_KEY = "mediaLibrary.scanQueue.v1";
-
-    function getQueue() {
-      try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); }
-      catch { return []; }
-    }
-    function setQueue(q) {
-      localStorage.setItem(QUEUE_KEY, JSON.stringify(q));
-      updateQueuePill();
-    }
-    function enqueue(barcode) {
-      const q = getQueue();
-      q.push({ barcode, ts: Date.now() });
-      setQueue(q);
-    }
-    async function flushQueue() {
-      const q = getQueue();
-      if (!q.length) return;
-
-      setStatus(`Flushing ${q.length} queued scan(s)…`, "muted");
-      let remaining = [];
-
-      for (const item of q) {
-        try {
-          const resp = await fetch("/scan", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ barcode: item.barcode })
-          });
-          if (!resp.ok) remaining.push(item);
-        } catch {
-          remaining.push(item);
-        }
-      }
-      setQueue(remaining);
-      setStatus(remaining.length ? "Some queued scans still pending" : "Queued scans flushed", remaining.length ? "err" : "ok");
-    }
-
-    // ---- UI helpers ----
     const startBtn = document.getElementById("start");
     const stopBtn = document.getElementById("stop");
     const video = document.getElementById("video");
@@ -98,7 +57,13 @@
     const serverRespEl = document.getElementById("serverResp");
     const errorsEl = document.getElementById("errors");
     const netEl = document.getElementById("net");
-    const qEl = document.getElementById("q");
+
+    let stream = null;
+    let scanning = false;
+    let reader = null;
+
+    let lastSent = null;
+    let lastSentAt = 0;
 
     function setStatus(text, cls) {
       statusEl.textContent = text;
@@ -112,23 +77,9 @@
       serverRespEl.textContent = obj ? JSON.stringify(obj, null, 2) : "—";
       serverRespEl.className = obj ? (ok ? "ok" : "err") : "muted";
     }
-    function updateNetPill() {
+    function updateNet() {
       netEl.textContent = navigator.onLine ? "online" : "offline";
-      netEl.style.opacity = "1";
     }
-    function updateQueuePill() {
-      const q = getQueue();
-      qEl.textContent = `queue: ${q.length}`;
-    }
-
-    // ---- Scanner state ----
-    let stream = null;
-    let scanning = false;
-    let reader = null;
-
-    // debounce duplicates
-    let lastSent = null;
-    let lastSentAt = 0;
 
     function stopCamera() {
       scanning = false;
@@ -183,15 +134,6 @@
           setStatus("Sending to server…", "muted");
           setServerResp({ sending: true, barcode });
 
-          // If offline, enqueue immediately
-          if (!navigator.onLine) {
-            enqueue(barcode);
-            setServerResp({ queued: true, barcode, reason: "offline" }, true);
-            setStatus("Queued (offline). Will sync when online.", "err");
-            navigator.vibrate?.(80);
-            return;
-          }
-
           try {
             const resp = await fetch("/scan", {
               method: "POST",
@@ -204,16 +146,13 @@
             try { json = JSON.parse(text); } catch { json = { raw: text }; }
 
             setServerResp({ http_status: resp.status, ...json }, resp.ok);
-            setStatus(resp.ok ? "Saved (or already exists). Keep scanning…" : "Server returned an error", resp.ok ? "ok" : "err");
+            setStatus(resp.ok ? "Saved (or already exists). Keep scanning…" : "Server error", resp.ok ? "ok" : "err");
             setError("");
             if (resp.ok) navigator.vibrate?.(120);
 
           } catch (e) {
-            // Network failure mid-request => queue
-            enqueue(barcode);
-            setStatus("Request failed. Queued for retry.", "err");
+            setStatus("Failed to reach server", "err");
             setError(String(e));
-            setServerResp({ queued: true, barcode, reason: "request_failed", error: String(e) }, false);
           }
         });
 
@@ -225,28 +164,11 @@
 
     startBtn.addEventListener("click", startCamera);
     stopBtn.addEventListener("click", stopCamera);
+    window.addEventListener("online", updateNet);
+    window.addEventListener("offline", updateNet);
 
-    // ---- Offline sync triggers ----
-    window.addEventListener("online", () => {
-      updateNetPill();
-      flushQueue();
-    });
-    window.addEventListener("offline", updateNetPill);
-
-    // ---- Service worker (offline-first UI) ----
-    (function registerSW() {
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
-      }
-    })();
-
-    // init UI
-    updateNetPill();
-    updateQueuePill();
+    updateNet();
     setStatus("Ready. Tap Start Camera.", "muted");
-
-    // attempt a flush on load if online
-    if (navigator.onLine) flushQueue();
   </script>
 </body>
 </html>

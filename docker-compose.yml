@@ -8,4 +8,4 @@ services:
     volumes:
       - ./data:/data
     environment:
-      BARCODELOOKUP_API_KEY: wv8hyvk5ff5565ow0tmrxsbhkbxckf
+      BARCODELOOKUP_API_KEY: xxx

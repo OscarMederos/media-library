@@ -7,7 +7,7 @@
   <style>
     body { font-family: system-ui, sans-serif; background:#0f0f0f; color:#fff; margin:0; padding:1rem; }
     h2 { margin: .25rem 0 1rem; }
-    .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; align-items:center; }
+    .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; }
     input, select { padding:.6rem; border-radius:10px; border:none; font-size:1rem; }
     input { flex: 2; min-width: 180px; }
     select { flex: 1; min-width: 160px; }
@@ -15,8 +15,6 @@
     #scanBtn { background:#4caf50; color:#000; }
     #refreshBtn { background:#1e88e5; color:#fff; }
     .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
-    .toggle { display:flex; align-items:center; gap:.4rem; padding:.55rem .8rem; border-radius:10px; background:#1c1c1c; }
-    .toggle input { transform: scale(1.2); }
 
     .item { background:#1c1c1c; padding:.85rem; border-radius:12px; margin-bottom:.6rem; }
     .title { font-weight:650; font-size: 1.02rem; margin-bottom: .15rem; }
@@ -26,12 +24,19 @@
     .actions button { font-size:.95rem; padding:.5rem .75rem; }
     .edit { background:#ffb300; color:#000; }
     .del { background:#ef5350; color:#fff; }
-    .norm { background:#26a69a; color:#000; }
 
     .empty { color:#777; text-align:center; margin-top:2rem; }
 
-    .modalBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:1rem; }
-    .modal { width: 100%; max-width: 820px; background:#1c1c1c; border-radius:14px; padding:1rem; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+    /* Modal */
+    .modalBackdrop {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      display:none; align-items:center; justify-content:center; padding:1rem;
+    }
+    .modal {
+      width: 100%; max-width: 640px;
+      background:#1c1c1c; border-radius:14px; padding:1rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,.5);
+    }
     .modal h3 { margin: 0 0 .75rem; }
     .grid { display:grid; grid-template-columns: 1fr; gap:.6rem; }
     .grid label { font-size:.9rem; color:#bbb; }
@@ -39,29 +44,18 @@
     textarea { min-height: 80px; resize: vertical; }
     .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:.6rem; }
     .row3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:.6rem; }
-    @media (max-width: 520px) { .row2, .row3 { grid-template-columns: 1fr; } }
+    @media (max-width: 520px) {
+      .row2, .row3 { grid-template-columns: 1fr; }
+    }
     .modalActions { display:flex; gap:.5rem; justify-content:flex-end; margin-top: .8rem; flex-wrap: wrap; }
     .save { background:#4caf50; color:#000; }
     .cancel { background:#444; color:#fff; }
-    .apply { background:#26a69a; color:#000; }
-
     .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
-    .diff { background:#151515; padding:.7rem; border-radius:12px; }
-    .kv { margin-top:.35rem; }
-    .k { font-weight:650; }
-    .v { color:#ddd; }
-
-    .cand { background:#121212; border-radius:12px; padding:.7rem; margin-top:.6rem; display:flex; gap:.7rem; align-items:flex-start; }
-    .cand img { width:64px; height:86px; object-fit:cover; border-radius:8px; background:#000; }
-    .cand .cmeta { flex: 1; }
-    .cand .ctitle { font-weight:700; margin-bottom:.15rem; }
-    .cand .csub { color:#aaa; font-size:.9rem; margin-bottom:.25rem; }
-    .cand .cplats { color:#888; font-size:.85rem; }
-    .cand input { transform: scale(1.2); margin-top:.25rem; }
   </style>
 </head>
+
 <body>
-  <h2>📚 My Library <span id="net" class="pill">…</span></h2>
+  <h2>📚 My Library <span id="net" class="pill">…</span> <span id="cache" class="pill">cache: 0</span></h2>
 
   <div class="top">
     <input id="search" type="search" placeholder="Search title…" />
@@ -72,12 +66,6 @@
       <option value="game">Games</option>
       <option value="unknown">Unknown</option>
     </select>
-
-    <div class="toggle">
-      <input id="needsReview" type="checkbox" />
-      <label for="needsReview">Needs review</label>
-    </div>
-
     <button id="refreshBtn">Refresh</button>
     <button id="scanBtn" onclick="location.href='/ui/scan.html'">Scan</button>
   </div>
@@ -85,7 +73,7 @@
   <div id="list"></div>
 
   <!-- Edit Modal -->
-  <div id="editBackdrop" class="modalBackdrop">
+  <div id="backdrop" class="modalBackdrop">
     <div class="modal">
       <h3>Edit Item</h3>
 
@@ -118,7 +106,7 @@
           </div>
           <div>
             <label>Format</label>
-            <input id="mFormat" placeholder="4K, Blu-ray, DVD, Disc…" />
+            <input id="mFormat" placeholder="disc/cart/digital, 4K/Blu-ray/DVD…" />
           </div>
           <div>
             <label>Release year</label>
@@ -157,33 +145,23 @@
       </div>
 
       <div class="modalActions">
-        <button class="cancel" id="editCancelBtn">Cancel</button>
-        <button class="save" id="editSaveBtn">Save</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Normalize Modal -->
-  <div id="normBackdrop" class="modalBackdrop">
-    <div class="modal">
-      <h3 id="normTitle">Normalize Preview</h3>
-      <div id="normBody" class="diff"></div>
-      <div class="modalActions">
-        <button class="cancel" id="normCancelBtn">Cancel</button>
-        <button class="apply" id="normApplyBtn">Apply</button>
+        <button class="cancel" id="cancelBtn">Cancel</button>
+        <button class="save" id="saveBtn">Save</button>
       </div>
     </div>
   </div>
 
   <script>
+    const CACHE_KEY = "mediaLibrary.mediaCache.v2";
+
     const listEl = document.getElementById("list");
     const searchEl = document.getElementById("search");
     const filterEl = document.getElementById("filter");
-    const needsReviewEl = document.getElementById("needsReview");
     const refreshBtn = document.getElementById("refreshBtn");
     const netEl = document.getElementById("net");
+    const cachePill = document.getElementById("cache");
 
-    const editBackdrop = document.getElementById("editBackdrop");
+    const backdrop = document.getElementById("backdrop");
     const mTitle = document.getElementById("mTitle");
     const mTitleRaw = document.getElementById("mTitleRaw");
     const mType = document.getElementById("mType");
@@ -195,47 +173,47 @@
     const mCoverUrl = document.getElementById("mCoverUrl");
     const mNotes = document.getElementById("mNotes");
     const mMeta = document.getElementById("mMeta");
-    const editCancelBtn = document.getElementById("editCancelBtn");
-    const editSaveBtn = document.getElementById("editSaveBtn");
 
-    const normBackdrop = document.getElementById("normBackdrop");
-    const normTitleEl = document.getElementById("normTitle");
-    const normBody = document.getElementById("normBody");
-    const normCancelBtn = document.getElementById("normCancelBtn");
-    const normApplyBtn = document.getElementById("normApplyBtn");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const saveBtn = document.getElementById("saveBtn");
 
     let currentItems = [];
     let editingItem = null;
 
-    let normalizeTarget = null;     // item object
-    let normalizeMode = null;       // "game" | "other"
-    let normalizeState = null;      // payload from preview
-    let selectedIgdbId = null;
+    function updateNet() {
+      netEl.textContent = navigator.onLine ? "online" : "offline";
+    }
 
-    function updateNet() { netEl.textContent = navigator.onLine ? "online" : "offline"; }
+    function saveCache(items) {
+      try {
+        localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), items }));
+        cachePill.textContent = `cache: ${items.length}`;
+      } catch {}
+    }
+
+    function loadCache() {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.items)) return null;
+        cachePill.textContent = `cache: ${parsed.items.length}`;
+        return parsed.items;
+      } catch {
+        return null;
+      }
+    }
 
     function escapeHtml(s) {
       return String(s ?? "")
-        .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
     }
-    function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
 
-    function looksNeedsReview(item) {
-      const t = String(item.title || "").toLowerCase();
-      const mt = String(item.media_type || "unknown");
-      const unknownTitle = t.startsWith("unknown");
-      const unknownType = mt === "unknown" || mt === "";
-      const hasMarkers = (item.title || "").includes("(") || (item.title || "").includes("[") ||
-                         (item.title || "").includes(" - ") || (item.title || "").includes(" – ") || (item.title || "").includes(" — ");
-      const missingPlatOrFmt = !(item.platform || "") || !(item.format || "");
-      // For games: review if unknown title/type OR markers exist OR missing cover/year (optional)
-      if (mt === "game") {
-        return unknownTitle || unknownType || hasMarkers || !(item.cover_url || "") || !(item.release_year || "");
-      }
-      // For others: review if unknown OR markers exist and missing plat/fmt
-      return unknownTitle || unknownType || (hasMarkers && missingPlatOrFmt);
-    }
+    function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
 
     function render(items) {
       listEl.innerHTML = "";
@@ -243,23 +221,23 @@
         listEl.innerHTML = `<div class="empty">No media found</div>`;
         return;
       }
+
       for (const item of items) {
         const div = document.createElement("div");
         div.className = "item";
 
         const type = item.media_type ?? "unknown";
         const plat = item.platform ? ` • ${item.platform}` : "";
-        const fmtStr = item.format ? ` • ${item.format}` : "";
-        const yr = item.release_year ? ` • ${item.release_year}` : "";
         const loc = item.location ? ` • ${item.location}` : "";
         const st = item.status ? ` • ${item.status}` : "";
+        const yr = item.release_year ? ` • ${item.release_year}` : "";
+        const fmtStr = item.format ? ` • ${item.format}` : "";
 
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
           <div class="meta">${escapeHtml(type)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
-            <button class="norm">${type === "game" ? "Normalize (IGDB)" : "Normalize"}</button>
             <button class="edit">Edit</button>
             <button class="del">Delete</button>
           </div>
@@ -267,7 +245,6 @@
 
         div.querySelector(".edit").addEventListener("click", () => openEdit(item.id));
         div.querySelector(".del").addEventListener("click", () => doDelete(item.id));
-        div.querySelector(".norm").addEventListener("click", () => openNormalize(item.id));
 
         listEl.appendChild(div);
       }
@@ -277,60 +254,68 @@
       const params = new URLSearchParams();
       if (filterEl.value) params.set("media_type", filterEl.value);
       if (searchEl.value) params.set("search", searchEl.value);
+
       const resp = await fetch("/media?" + params.toString());
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       return await resp.json();
     }
 
-    function applyClientFilters(items) {
-      let out = items;
-      if (needsReviewEl.checked) out = out.filter(looksNeedsReview);
-
-      const q = (searchEl.value || "").trim().toLowerCase();
-      if (q) out = out.filter(i => String(i.title || "").toLowerCase().includes(q));
-
-      const mt = filterEl.value;
-      if (mt) out = out.filter(i => String(i.media_type || "unknown") === mt);
-
-      return out;
-    }
-
-    async function load() {
+    async function load({ preferNetwork = true } = {}) {
       updateNet();
+
+      const cached = loadCache();
+      if (cached) {
+        currentItems = cached;
+        // render cached immediately; network refresh may replace it
+        render(cached);
+      }
+
+      if (!preferNetwork || !navigator.onLine) return;
+
       try {
         const items = await fetchMediaNetwork();
         currentItems = items;
-        render(applyClientFilters(items));
+        saveCache(items);
+        render(items);
       } catch (e) {
         console.log("load failed:", e);
-        render(applyClientFilters(currentItems));
       }
     }
 
     function openEdit(id) {
       const item = currentItems.find(x => x.id === id);
       if (!item) return;
+
       editingItem = item;
 
       mTitle.value = item.title ?? "";
       mTitleRaw.value = item.title_raw ?? "";
       mType.value = item.media_type ?? "unknown";
+
       mPlatform.value = item.platform ?? "";
       mFormat.value = item.format ?? "";
       mYear.value = item.release_year ?? "";
+
       mLocation.value = item.location ?? "";
       mStatus.value = item.status ?? "";
+
       mCoverUrl.value = item.cover_url ?? "";
       mNotes.value = item.notes ?? "";
 
-      mMeta.textContent = `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
-      editBackdrop.style.display = "flex";
+      mMeta.textContent =
+        `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
+
+      backdrop.style.display = "flex";
     }
 
-    function closeEdit() { editBackdrop.style.display = "none"; editingItem = null; }
+    function closeEdit() {
+      backdrop.style.display = "none";
+      editingItem = null;
+    }
 
     async function saveEdit() {
       if (!editingItem) return;
+
       const yearVal = mYear.value.trim();
       const patch = {
         title: mTitle.value,
@@ -352,10 +337,13 @@
           body: JSON.stringify(patch)
         });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
+
         const data = await resp.json();
         const updated = data.item;
+
         currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
-        render(applyClientFilters(currentItems));
+        saveCache(currentItems);
+        render(currentItems);
         closeEdit();
       } catch (e) {
         alert("Update failed: " + e);
@@ -370,213 +358,32 @@
       try {
         const resp = await fetch(`/media/${id}`, { method: "DELETE" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
+
         currentItems = currentItems.filter(x => x.id !== id);
-        render(applyClientFilters(currentItems));
+        saveCache(currentItems);
+        render(currentItems);
       } catch (e) {
         alert("Delete failed: " + e);
       }
     }
 
-    function closeNormalize() {
-      normBackdrop.style.display = "none";
-      normBody.innerHTML = "";
-      normalizeTarget = null;
-      normalizeMode = null;
-      normalizeState = null;
-      selectedIgdbId = null;
-    }
+    cancelBtn.addEventListener("click", closeEdit);
+    saveBtn.addEventListener("click", saveEdit);
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeEdit(); });
 
-    function renderKeyValue(label, curVal, newVal) {
-      return `
-        <div class="kv"><span class="k">${escapeHtml(label)}:</span>
-          <span class="v">${escapeHtml(fmt(curVal))}</span>
-          &nbsp;→&nbsp;
-          <span class="v">${escapeHtml(fmt(newVal))}</span>
-        </div>
-      `;
-    }
-
-    function renderOtherPreview(current, proposed) {
-      const rows = [];
-      if ("title" in proposed) rows.push(renderKeyValue("Title", current.title, proposed.title));
-      if ("platform" in proposed) rows.push(renderKeyValue("Platform", current.platform, proposed.platform));
-      if ("format" in proposed) rows.push(renderKeyValue("Format", current.format, proposed.format));
-      if (!rows.length) return `<div class="kv">No normalization changes suggested.</div>`;
-      return `
-        <div class="kv"><span class="k">Item:</span> <span class="v">${escapeHtml(current.title)} (id:${current.id})</span></div>
-        <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
-        ${rows.join("")}
-      `;
-    }
-
-    function renderGamePreview(payload) {
-      const cur = payload.current;
-      const best = payload.proposed_best_guess || {};
-      const cands = payload.candidates || [];
-
-      const rows = [];
-      if ("title" in best) rows.push(renderKeyValue("Title", cur.title, best.title));
-      if ("platform" in best) rows.push(renderKeyValue("Platform", cur.platform, best.platform));
-      if ("format" in best) rows.push(renderKeyValue("Format", cur.format, best.format));
-      if ("release_year" in best) rows.push(renderKeyValue("Release year", cur.release_year, best.release_year));
-      if ("cover_url" in best) rows.push(renderKeyValue("Cover URL", cur.cover_url, best.cover_url));
-
-      let html = `
-        <div class="kv"><span class="k">Item:</span> <span class="v">${escapeHtml(cur.title)} (id:${cur.id})</span></div>
-        <div class="kv"><span class="k">Search title:</span> <span class="v">${escapeHtml(payload.stripped_title || cur.title)}</span></div>
-        <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
-        ${rows.length ? rows.join("") : `<div class="kv">No best-guess changes suggested.</div>`}
-        <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
-        <div class="kv"><span class="k">Choose the correct IGDB match:</span></div>
-      `;
-
-      if (!cands.length) {
-        html += `<div class="kv">No IGDB candidates returned. (Check IGDB env vars and network.)</div>`;
-        return html;
-      }
-
-      html += cands.map((c, idx) => {
-        const id = c.igdb_id;
-        const checked = (idx === 0) ? "checked" : "";
-        const plats = (c.platforms || []).slice(0, 8).join(", ");
-        return `
-          <div class="cand">
-            ${c.cover_url ? `<img src="${escapeHtml(c.cover_url)}" alt="cover">` : `<img src="" alt="cover" style="visibility:hidden;">`}
-            <div class="cmeta">
-              <div class="ctitle">${escapeHtml(c.name)}</div>
-              <div class="csub">IGDB ID: ${escapeHtml(id)} • Year: ${escapeHtml(fmt(c.release_year))}</div>
-              <div class="cplats">Platforms: ${escapeHtml(plats || "—")}</div>
-            </div>
-            <div>
-              <input type="radio" name="igdbPick" value="${escapeHtml(id)}" ${checked}/>
-            </div>
-          </div>
-        `;
-      }).join("");
-
-      return html;
-    }
-
-    async function openNormalize(id) {
-      const item = currentItems.find(x => x.id === id);
-      if (!item) return;
-      normalizeTarget = item;
-
-      try {
-        if ((item.media_type || "unknown") === "game") {
-          normalizeMode = "game";
-          normTitleEl.textContent = "Normalize Game (IGDB)";
-          const resp = await fetch(`/normalize_game/${id}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ dry_run: true })
-          });
-          if (!resp.ok) throw new Error("HTTP " + resp.status);
-          const data = await resp.json();
-          normalizeState = data;
-
-          normBody.innerHTML = renderGamePreview(data);
-          normBackdrop.style.display = "flex";
-
-          // default selection
-          const first = normBody.querySelector('input[name="igdbPick"]');
-          selectedIgdbId = first ? parseInt(first.value, 10) : null;
-
-          normBody.querySelectorAll('input[name="igdbPick"]').forEach(r => {
-            r.addEventListener("change", () => {
-              selectedIgdbId = parseInt(r.value, 10);
-            });
-          });
-
-          return;
-        }
-
-        // non-game
-        normalizeMode = "other";
-        normTitleEl.textContent = "Normalize Preview";
-        const resp = await fetch(`/normalize/${id}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dry_run: true })
-        });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const data = await resp.json();
-
-        if (data.status === "no_changes") {
-          alert("No normalization changes suggested for this item.");
-          return;
-        }
-
-        normalizeState = data;
-        normBody.innerHTML = renderOtherPreview(data.current, data.proposed);
-        normBackdrop.style.display = "flex";
-
-      } catch (e) {
-        alert("Normalize preview failed: " + e);
-      }
-    }
-
-    async function applyNormalize() {
-      if (!normalizeTarget) return;
-
-      try {
-        if (normalizeMode === "game") {
-          if (!selectedIgdbId) {
-            alert("Pick an IGDB candidate first.");
-            return;
-          }
-          const resp = await fetch(`/normalize_game/${normalizeTarget.id}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ dry_run: false, igdb_id: selectedIgdbId })
-          });
-          if (!resp.ok) throw new Error("HTTP " + resp.status);
-          const data = await resp.json();
-
-          const updated = data.item;
-          currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
-          render(applyClientFilters(currentItems));
-          closeNormalize();
-          return;
-        }
-
-        // non-game apply
-        const resp = await fetch(`/normalize/${normalizeTarget.id}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dry_run: false })
-        });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const data = await resp.json();
-        const updated = data.item;
-        currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
-        render(applyClientFilters(currentItems));
-        closeNormalize();
-
-      } catch (e) {
-        alert("Normalize apply failed: " + e);
-      }
-    }
-
-    // Events
-    editCancelBtn.addEventListener("click", closeEdit);
-    editSaveBtn.addEventListener("click", saveEdit);
-    editBackdrop.addEventListener("click", (e) => { if (e.target === editBackdrop) closeEdit(); });
-
-    normCancelBtn.addEventListener("click", closeNormalize);
-    normApplyBtn.addEventListener("click", applyNormalize);
-    normBackdrop.addEventListener("click", (e) => { if (e.target === normBackdrop) closeNormalize(); });
-
-    refreshBtn.addEventListener("click", load);
-    searchEl.addEventListener("input", () => render(applyClientFilters(currentItems)));
-    filterEl.addEventListener("change", () => load());
-    needsReviewEl.addEventListener("change", () => render(applyClientFilters(currentItems)));
-
-    window.addEventListener("online", load);
+    refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
+    window.addEventListener("online", () => load({ preferNetwork: true }));
     window.addEventListener("offline", updateNet);
 
+    // service worker (optional): keep if you already use sq.js
+    (function registerSW() {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
+      }
+    })();
+
     updateNet();
-    load();
+    load({ preferNetwork: true });
   </script>
 </body>
 </html>

@@ -7,14 +7,22 @@
   <style>
     body { font-family: system-ui, sans-serif; background:#0f0f0f; color:#fff; margin:0; padding:1rem; }
     h2 { margin: .25rem 0 1rem; }
-    .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; }
+
+    .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; align-items:center; }
     input, select { padding:.6rem; border-radius:10px; border:none; font-size:1rem; }
     input { flex: 2; min-width: 180px; }
     select { flex: 1; min-width: 160px; }
     button { padding:.6rem .9rem; border-radius:10px; border:0; font-size:1rem; }
     #scanBtn { background:#4caf50; color:#000; }
     #refreshBtn { background:#1e88e5; color:#fff; }
+    #bulkBtn { background:#7e57c2; color:#fff; }
     .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
+
+    .toggle {
+      display:flex; align-items:center; gap:.4rem;
+      padding:.55rem .8rem; border-radius:10px; background:#1c1c1c;
+    }
+    .toggle input { transform: scale(1.2); }
 
     .item { background:#1c1c1c; padding:.85rem; border-radius:12px; margin-bottom:.6rem; }
     .title { font-weight:650; font-size: 1.02rem; margin-bottom: .15rem; }
@@ -24,6 +32,7 @@
     .actions button { font-size:.95rem; padding:.5rem .75rem; }
     .edit { background:#ffb300; color:#000; }
     .del { background:#ef5350; color:#fff; }
+    .norm { background:#26a69a; color:#000; }
 
     .empty { color:#777; text-align:center; margin-top:2rem; }
 
@@ -33,7 +42,7 @@
       display:none; align-items:center; justify-content:center; padding:1rem;
     }
     .modal {
-      width: 100%; max-width: 640px;
+      width: 100%; max-width: 720px;
       background:#1c1c1c; border-radius:14px; padding:1rem;
       box-shadow: 0 10px 30px rgba(0,0,0,.5);
     }
@@ -44,18 +53,23 @@
     textarea { min-height: 80px; resize: vertical; }
     .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:.6rem; }
     .row3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:.6rem; }
-    @media (max-width: 520px) {
-      .row2, .row3 { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 520px) { .row2, .row3 { grid-template-columns: 1fr; } }
+
     .modalActions { display:flex; gap:.5rem; justify-content:flex-end; margin-top: .8rem; flex-wrap: wrap; }
     .save { background:#4caf50; color:#000; }
     .cancel { background:#444; color:#fff; }
+    .apply { background:#26a69a; color:#000; }
     .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
+
+    .kv { margin-top:.35rem; }
+    .k { font-weight:650; }
+    .v { color:#ddd; }
+    .diff { background:#151515; padding:.7rem; border-radius:12px; }
   </style>
 </head>
 
 <body>
-  <h2>📚 My Library <span id="net" class="pill">…</span> <span id="cache" class="pill">cache: 0</span></h2>
+  <h2>📚 My Library <span id="net" class="pill">…</span></h2>
 
   <div class="top">
     <input id="search" type="search" placeholder="Search title…" />
@@ -66,14 +80,21 @@
       <option value="game">Games</option>
       <option value="unknown">Unknown</option>
     </select>
+
+    <div class="toggle">
+      <input id="needsReview" type="checkbox" />
+      <label for="needsReview">Needs review</label>
+    </div>
+
     <button id="refreshBtn">Refresh</button>
+    <button id="bulkBtn">Bulk Normalize (50)</button>
     <button id="scanBtn" onclick="location.href='/ui/scan.html'">Scan</button>
   </div>
 
   <div id="list"></div>
 
   <!-- Edit Modal -->
-  <div id="backdrop" class="modalBackdrop">
+  <div id="editBackdrop" class="modalBackdrop">
     <div class="modal">
       <h3>Edit Item</h3>
 
@@ -106,7 +127,7 @@
           </div>
           <div>
             <label>Format</label>
-            <input id="mFormat" placeholder="disc/cart/digital, 4K/Blu-ray/DVD…" />
+            <input id="mFormat" placeholder="4K, Blu-ray, DVD, Disc…" />
           </div>
           <div>
             <label>Release year</label>
@@ -145,23 +166,37 @@
       </div>
 
       <div class="modalActions">
-        <button class="cancel" id="cancelBtn">Cancel</button>
-        <button class="save" id="saveBtn">Save</button>
+        <button class="cancel" id="editCancelBtn">Cancel</button>
+        <button class="save" id="editSaveBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Normalize Preview Modal -->
+  <div id="normBackdrop" class="modalBackdrop">
+    <div class="modal">
+      <h3>Normalize Preview</h3>
+
+      <div id="normBody" class="diff"></div>
+
+      <div class="modalActions">
+        <button class="cancel" id="normCancelBtn">Cancel</button>
+        <button class="apply" id="normApplyBtn">Apply</button>
       </div>
     </div>
   </div>
 
   <script>
-    const CACHE_KEY = "mediaLibrary.mediaCache.v2";
-
     const listEl = document.getElementById("list");
     const searchEl = document.getElementById("search");
     const filterEl = document.getElementById("filter");
+    const needsReviewEl = document.getElementById("needsReview");
     const refreshBtn = document.getElementById("refreshBtn");
+    const bulkBtn = document.getElementById("bulkBtn");
     const netEl = document.getElementById("net");
-    const cachePill = document.getElementById("cache");
 
-    const backdrop = document.getElementById("backdrop");
+    // Edit modal elements
+    const editBackdrop = document.getElementById("editBackdrop");
     const mTitle = document.getElementById("mTitle");
     const mTitleRaw = document.getElementById("mTitleRaw");
     const mType = document.getElementById("mType");
@@ -173,35 +208,22 @@
     const mCoverUrl = document.getElementById("mCoverUrl");
     const mNotes = document.getElementById("mNotes");
     const mMeta = document.getElementById("mMeta");
+    const editCancelBtn = document.getElementById("editCancelBtn");
+    const editSaveBtn = document.getElementById("editSaveBtn");
 
-    const cancelBtn = document.getElementById("cancelBtn");
-    const saveBtn = document.getElementById("saveBtn");
+    // Normalize modal elements
+    const normBackdrop = document.getElementById("normBackdrop");
+    const normBody = document.getElementById("normBody");
+    const normCancelBtn = document.getElementById("normCancelBtn");
+    const normApplyBtn = document.getElementById("normApplyBtn");
 
     let currentItems = [];
     let editingItem = null;
+    let normalizeTargetId = null;
+    let normalizeProposed = null;
 
     function updateNet() {
       netEl.textContent = navigator.onLine ? "online" : "offline";
-    }
-
-    function saveCache(items) {
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), items }));
-        cachePill.textContent = `cache: ${items.length}`;
-      } catch {}
-    }
-
-    function loadCache() {
-      try {
-        const raw = localStorage.getItem(CACHE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed || !Array.isArray(parsed.items)) return null;
-        cachePill.textContent = `cache: ${parsed.items.length}`;
-        return parsed.items;
-      } catch {
-        return null;
-      }
     }
 
     function escapeHtml(s) {
@@ -214,6 +236,21 @@
     }
 
     function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
+
+    function looksNeedsReview(item) {
+      const t = String(item.title || "");
+      const mt = String(item.media_type || "unknown");
+      const plat = String(item.platform || "");
+      const fmtv = String(item.format || "");
+
+      const unknownTitle = t.toLowerCase().startsWith("unknown");
+      const unknownType = mt === "unknown" || mt === "";
+      const hasMarkers = t.includes("(") || t.includes("[") || t.includes(" - ") || t.includes(" – ") || t.includes(" — ");
+      const missingPlatOrFmt = (!plat || !fmtv);
+
+      // "Needs review": unknown OR has markers suggesting extractable platform/format OR missing plat/fmt but markers exist
+      return unknownTitle || unknownType || (hasMarkers && missingPlatOrFmt);
+    }
 
     function render(items) {
       listEl.innerHTML = "";
@@ -228,16 +265,17 @@
 
         const type = item.media_type ?? "unknown";
         const plat = item.platform ? ` • ${item.platform}` : "";
+        const fmtStr = item.format ? ` • ${item.format}` : "";
+        const yr = item.release_year ? ` • ${item.release_year}` : "";
         const loc = item.location ? ` • ${item.location}` : "";
         const st = item.status ? ` • ${item.status}` : "";
-        const yr = item.release_year ? ` • ${item.release_year}` : "";
-        const fmtStr = item.format ? ` • ${item.format}` : "";
 
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
           <div class="meta">${escapeHtml(type)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
+            <button class="norm">Normalize</button>
             <button class="edit">Edit</button>
             <button class="del">Delete</button>
           </div>
@@ -245,6 +283,7 @@
 
         div.querySelector(".edit").addEventListener("click", () => openEdit(item.id));
         div.querySelector(".del").addEventListener("click", () => doDelete(item.id));
+        div.querySelector(".norm").addEventListener("click", () => openNormalize(item.id));
 
         listEl.appendChild(div);
       }
@@ -254,31 +293,37 @@
       const params = new URLSearchParams();
       if (filterEl.value) params.set("media_type", filterEl.value);
       if (searchEl.value) params.set("search", searchEl.value);
-
       const resp = await fetch("/media?" + params.toString());
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       return await resp.json();
     }
 
-    async function load({ preferNetwork = true } = {}) {
-      updateNet();
+    function applyClientFilters(items) {
+      let out = items;
 
-      const cached = loadCache();
-      if (cached) {
-        currentItems = cached;
-        // render cached immediately; network refresh may replace it
-        render(cached);
+      if (needsReviewEl.checked) {
+        out = out.filter(looksNeedsReview);
       }
 
-      if (!preferNetwork || !navigator.onLine) return;
+      // Client-side search/filter is already handled server-side, but keep it safe if offline later
+      const q = (searchEl.value || "").trim().toLowerCase();
+      if (q) out = out.filter(i => String(i.title || "").toLowerCase().includes(q));
 
+      const mt = filterEl.value;
+      if (mt) out = out.filter(i => String(i.media_type || "unknown") === mt);
+
+      return out;
+    }
+
+    async function load() {
+      updateNet();
       try {
         const items = await fetchMediaNetwork();
         currentItems = items;
-        saveCache(items);
-        render(items);
+        render(applyClientFilters(items));
       } catch (e) {
         console.log("load failed:", e);
+        render(applyClientFilters(currentItems));
       }
     }
 
@@ -305,11 +350,11 @@
       mMeta.textContent =
         `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
 
-      backdrop.style.display = "flex";
+      editBackdrop.style.display = "flex";
     }
 
     function closeEdit() {
-      backdrop.style.display = "none";
+      editBackdrop.style.display = "none";
       editingItem = null;
     }
 
@@ -321,6 +366,7 @@
         title: mTitle.value,
         title_raw: mTitleRaw.value,
         media_type: mType.value,
+
         platform: mPlatform.value,
         format: mFormat.value,
         location: mLocation.value,
@@ -342,8 +388,7 @@
         const updated = data.item;
 
         currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
-        saveCache(currentItems);
-        render(currentItems);
+        render(applyClientFilters(currentItems));
         closeEdit();
       } catch (e) {
         alert("Update failed: " + e);
@@ -360,30 +405,135 @@
         if (!resp.ok) throw new Error("HTTP " + resp.status);
 
         currentItems = currentItems.filter(x => x.id !== id);
-        saveCache(currentItems);
-        render(currentItems);
+        render(applyClientFilters(currentItems));
       } catch (e) {
         alert("Delete failed: " + e);
       }
     }
 
-    cancelBtn.addEventListener("click", closeEdit);
-    saveBtn.addEventListener("click", saveEdit);
-    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeEdit(); });
+    function closeNormalize() {
+      normBackdrop.style.display = "none";
+      normBody.innerHTML = "";
+      normalizeTargetId = null;
+      normalizeProposed = null;
+    }
 
-    refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
-    window.addEventListener("online", () => load({ preferNetwork: true }));
+    function renderNormalizePreview(current, proposed) {
+      const rows = [];
+
+      function addRow(label, curVal, newVal) {
+        rows.push(`
+          <div class="kv"><span class="k">${escapeHtml(label)}:</span>
+            <span class="v">${escapeHtml(fmt(curVal))}</span>
+            &nbsp;→&nbsp;
+            <span class="v">${escapeHtml(fmt(newVal))}</span>
+          </div>
+        `);
+      }
+
+      if ("title" in proposed) addRow("Title", current.title, proposed.title);
+      if ("platform" in proposed) addRow("Platform", current.platform, proposed.platform);
+      if ("format" in proposed) addRow("Format", current.format, proposed.format);
+
+      if (!rows.length) {
+        return `<div class="kv">No normalization changes suggested.</div>`;
+      }
+
+      return `
+        <div class="kv"><span class="k">Item:</span> <span class="v">${escapeHtml(current.title)} (id:${current.id})</span></div>
+        <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
+        ${rows.join("")}
+      `;
+    }
+
+    async function openNormalize(id) {
+      try {
+        const resp = await fetch(`/normalize/${id}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dry_run: true })
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+
+        if (data.status === "no_changes") {
+          alert("No normalization changes suggested for this item.");
+          return;
+        }
+
+        normalizeTargetId = id;
+        normalizeProposed = data.proposed;
+
+        normBody.innerHTML = renderNormalizePreview(data.current, data.proposed);
+        normBackdrop.style.display = "flex";
+      } catch (e) {
+        alert("Normalize preview failed: " + e);
+      }
+    }
+
+    async function applyNormalize() {
+      if (!normalizeTargetId) return;
+      try {
+        const resp = await fetch(`/normalize/${normalizeTargetId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dry_run: false })
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+
+        if (data.status !== "applied") {
+          alert("Unexpected normalize result: " + JSON.stringify(data));
+          return;
+        }
+
+        const updated = data.item;
+        currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
+        render(applyClientFilters(currentItems));
+        closeNormalize();
+      } catch (e) {
+        alert("Normalize apply failed: " + e);
+      }
+    }
+
+    async function bulkNormalize() {
+      if (!confirm("Run bulk normalize for up to 50 items that look like they have platform/format in the title?")) return;
+      try {
+        const resp = await fetch(`/normalize?limit=50`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dry_run: false })
+        });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        alert(`Bulk normalization completed. Updated: ${data.count}`);
+        await load();
+      } catch (e) {
+        alert("Bulk normalize failed: " + e);
+      }
+    }
+
+    // Events
+    editCancelBtn.addEventListener("click", closeEdit);
+    editSaveBtn.addEventListener("click", saveEdit);
+    editBackdrop.addEventListener("click", (e) => { if (e.target === editBackdrop) closeEdit(); });
+
+    normCancelBtn.addEventListener("click", closeNormalize);
+    normApplyBtn.addEventListener("click", applyNormalize);
+    normBackdrop.addEventListener("click", (e) => { if (e.target === normBackdrop) closeNormalize(); });
+
+    refreshBtn.addEventListener("click", load);
+    bulkBtn.addEventListener("click", bulkNormalize);
+
+    searchEl.addEventListener("input", () => render(applyClientFilters(currentItems)));
+    filterEl.addEventListener("change", () => load());
+    needsReviewEl.addEventListener("change", () => render(applyClientFilters(currentItems)));
+
+    window.addEventListener("online", load);
     window.addEventListener("offline", updateNet);
 
-    // service worker (optional): keep if you already use sq.js
-    (function registerSW() {
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
-      }
-    })();
-
     updateNet();
-    load({ preferNetwork: true });
+    load();
   </script>
 </body>
 </html>

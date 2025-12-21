@@ -10,6 +10,7 @@
     .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; }
     input, select { padding:.6rem; border-radius:10px; border:none; font-size:1rem; }
     input { flex: 2; min-width: 180px; }
+    #extra { flex: 1.5; min-width: 180px; }
     select { flex: 1; min-width: 160px; }
     button { padding:.6rem .9rem; border-radius:10px; border:0; font-size:1rem; }
     #scanBtn { background:#4caf50; color:#000; }
@@ -51,6 +52,7 @@
     .save { background:#4caf50; color:#000; }
     .cancel { background:#444; color:#fff; }
     .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
+    .hidden { display:none !important; }
   </style>
 </head>
 
@@ -59,6 +61,7 @@
 
   <div class="top">
     <input id="search" type="search" placeholder="Search title…" />
+    <input id="extra" type="search" class="hidden" placeholder="Author / Platform…" />
     <select id="filter">
       <option value="">All types</option>
       <option value="book">Books</option>
@@ -99,9 +102,16 @@
           <input id="mTitleRaw" />
         </div>
 
+        <div id="authorRow" class="row2 hidden">
+          <div style="grid-column: 1 / -1;">
+            <label>Author (books)</label>
+            <input id="mAuthor" placeholder="e.g., Ursula K. Le Guin" />
+          </div>
+        </div>
+
         <div class="row3">
           <div>
-            <label>Platform / Console</label>
+            <label>Platform / Console (games)</label>
             <input id="mPlatform" placeholder="PS5, Switch, Xbox 360…" />
           </div>
           <div>
@@ -152,10 +162,11 @@
   </div>
 
   <script>
-    const CACHE_KEY = "mediaLibrary.mediaCache.v2";
+    const CACHE_KEY = "mediaLibrary.mediaCache.v3";
 
     const listEl = document.getElementById("list");
     const searchEl = document.getElementById("search");
+    const extraEl = document.getElementById("extra");
     const filterEl = document.getElementById("filter");
     const refreshBtn = document.getElementById("refreshBtn");
     const netEl = document.getElementById("net");
@@ -165,6 +176,8 @@
     const mTitle = document.getElementById("mTitle");
     const mTitleRaw = document.getElementById("mTitleRaw");
     const mType = document.getElementById("mType");
+    const authorRow = document.getElementById("authorRow");
+    const mAuthor = document.getElementById("mAuthor");
     const mPlatform = document.getElementById("mPlatform");
     const mFormat = document.getElementById("mFormat");
     const mYear = document.getElementById("mYear");
@@ -215,6 +228,51 @@
 
     function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
 
+    function updateExtraUI() {
+      const t = filterEl.value;
+      if (t === "book") {
+        extraEl.classList.remove("hidden");
+        extraEl.placeholder = "Filter by author…";
+      } else if (t === "game") {
+        extraEl.classList.remove("hidden");
+        extraEl.placeholder = "Filter by platform…";
+      } else {
+        extraEl.classList.add("hidden");
+        extraEl.value = "";
+      }
+    }
+
+    function norm(s) { return String(s ?? "").toLowerCase().trim(); }
+
+    function applyFilters(items) {
+      const t = filterEl.value;
+      const q = norm(searchEl.value);
+      const extra = norm(extraEl.value);
+
+      return (items || []).filter(item => {
+        const mt = norm(item.media_type || "unknown");
+
+        if (t && mt !== norm(t)) return false;
+
+        if (q) {
+          const titleOk = norm(item.title).includes(q);
+          if (!titleOk) return false;
+        }
+
+        if (extra) {
+          if (t === "book") {
+            if (!norm(item.author).includes(extra)) return false;
+          } else if (t === "game") {
+            if (!norm(item.platform).includes(extra)) return false;
+          } else {
+            // if user somehow shows it, ignore
+          }
+        }
+
+        return true;
+      });
+    }
+
     function render(items) {
       listEl.innerHTML = "";
       if (!items || !items.length) {
@@ -227,6 +285,7 @@
         div.className = "item";
 
         const type = item.media_type ?? "unknown";
+        const author = (type === "book" && item.author) ? ` • ${item.author}` : "";
         const plat = item.platform ? ` • ${item.platform}` : "";
         const loc = item.location ? ` • ${item.location}` : "";
         const st = item.status ? ` • ${item.status}` : "";
@@ -235,7 +294,7 @@
 
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
-          <div class="meta">${escapeHtml(type)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
+          <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
             <button class="edit">Edit</button>
@@ -250,10 +309,21 @@
       }
     }
 
+    function rerender() {
+      render(applyFilters(currentItems));
+    }
+
     async function fetchMediaNetwork() {
       const params = new URLSearchParams();
-      if (filterEl.value) params.set("media_type", filterEl.value);
+      const t = filterEl.value;
+
+      if (t) params.set("media_type", t);
       if (searchEl.value) params.set("search", searchEl.value);
+
+      if (extraEl.value) {
+        if (t === "book") params.set("author", extraEl.value);
+        if (t === "game") params.set("platform", extraEl.value);
+      }
 
       const resp = await fetch("/media?" + params.toString());
       if (!resp.ok) throw new Error("HTTP " + resp.status);
@@ -266,8 +336,7 @@
       const cached = loadCache();
       if (cached) {
         currentItems = cached;
-        // render cached immediately; network refresh may replace it
-        render(cached);
+        rerender();
       }
 
       if (!preferNetwork || !navigator.onLine) return;
@@ -276,7 +345,7 @@
         const items = await fetchMediaNetwork();
         currentItems = items;
         saveCache(items);
-        render(items);
+        rerender();
       } catch (e) {
         console.log("load failed:", e);
       }
@@ -292,6 +361,7 @@
       mTitleRaw.value = item.title_raw ?? "";
       mType.value = item.media_type ?? "unknown";
 
+      mAuthor.value = item.author ?? "";
       mPlatform.value = item.platform ?? "";
       mFormat.value = item.format ?? "";
       mYear.value = item.release_year ?? "";
@@ -302,10 +372,18 @@
       mCoverUrl.value = item.cover_url ?? "";
       mNotes.value = item.notes ?? "";
 
+      updateModalVisibility();
+
       mMeta.textContent =
         `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
 
       backdrop.style.display = "flex";
+    }
+
+    function updateModalVisibility() {
+      const t = mType.value;
+      if (t === "book") authorRow.classList.remove("hidden");
+      else authorRow.classList.add("hidden");
     }
 
     function closeEdit() {
@@ -317,11 +395,16 @@
       if (!editingItem) return;
 
       const yearVal = mYear.value.trim();
+      const typeVal = mType.value;
+
       const patch = {
         title: mTitle.value,
         title_raw: mTitleRaw.value,
-        media_type: mType.value,
+        media_type: typeVal,
+
+        author: (typeVal === "book") ? mAuthor.value : "",
         platform: mPlatform.value,
+
         format: mFormat.value,
         location: mLocation.value,
         status: mStatus.value,
@@ -343,7 +426,7 @@
 
         currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
         saveCache(currentItems);
-        render(currentItems);
+        rerender();
         closeEdit();
       } catch (e) {
         alert("Update failed: " + e);
@@ -361,27 +444,46 @@
 
         currentItems = currentItems.filter(x => x.id !== id);
         saveCache(currentItems);
-        render(currentItems);
+        rerender();
       } catch (e) {
         alert("Delete failed: " + e);
       }
     }
 
+    // Events
     cancelBtn.addEventListener("click", closeEdit);
     saveBtn.addEventListener("click", saveEdit);
     backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeEdit(); });
 
     refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
     window.addEventListener("online", () => load({ preferNetwork: true }));
-    window.addEventListener("offline", updateNet);
+    window.addEventListener("offline", () => updateNet());
 
-    // service worker (optional): keep if you already use sq.js
+    searchEl.addEventListener("input", () => {
+      if (navigator.onLine) load({ preferNetwork: true });
+      else rerender();
+    });
+
+    extraEl.addEventListener("input", () => {
+      if (navigator.onLine) load({ preferNetwork: true });
+      else rerender();
+    });
+
+    filterEl.addEventListener("change", () => {
+      updateExtraUI();
+      load({ preferNetwork: true });
+    });
+
+    mType.addEventListener("change", updateModalVisibility);
+
+    // service worker (optional): sq.js is a service worker in this app
     (function registerSW() {
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
       }
     })();
 
+    updateExtraUI();
     updateNet();
     load({ preferNetwork: true });
   </script>

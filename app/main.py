@@ -1,12 +1,15 @@
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import time
+from typing import Any
+
+import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import sqlite3
-import os
-import requests
-import time
-import json
-from typing import Any
 
 DB_PATH = os.getenv("DB_PATH", "/data/media.db")
 BARCODELOOKUP_API_KEY = os.getenv("BARCODELOOKUP_API_KEY")
@@ -15,56 +18,25 @@ app = FastAPI()
 
 
 # -----------------------------
-# Models
-# -----------------------------
-class ScanRequest(BaseModel):
-    barcode: str
-
-
-class MediaUpdate(BaseModel):
-    title: str | None = None
-    title_raw: str | None = None
-    media_type: str | None = None
-
-    platform: str | None = None
-    format: str | None = None
-    location: str | None = None
-    status: str | None = None
-    release_year: int | None = None
-    cover_url: str | None = None
-
-    notes: str | None = None
-
-
-# -----------------------------
 # DB helpers
 # -----------------------------
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def _ensure_column(db: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
-    """
-    Best-effort idempotent column add for SQLite.
-    """
     cols = [r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]
     if column not in cols:
         db.execute(ddl)
         db.commit()
 
 
-def _ensure_index(db: sqlite3.Connection, ddl: str) -> None:
-    db.execute(ddl)
-    db.commit()
-
-
-@app.on_event("startup")
 def init_db() -> None:
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     db = get_db()
 
-    # Base table (includes upgraded columns so fresh installs get everything)
     db.execute(
         """
         CREATE TABLE IF NOT EXISTS media (
@@ -75,7 +47,8 @@ def init_db() -> None:
             title_raw TEXT,
             media_type TEXT,
 
-            platform TEXT,
+            author TEXT,              -- books
+            platform TEXT,            -- games
             format TEXT,
             location TEXT,
             status TEXT,
@@ -94,8 +67,10 @@ def init_db() -> None:
     )
     db.commit()
 
-    # Auto-migrate older DBs (safe for your existing 400 items)
+    # Auto-migrate older DBs
     _ensure_column(db, "media", "title_raw", "ALTER TABLE media ADD COLUMN title_raw TEXT")
+    _ensure_column(db, "media", "media_type", "ALTER TABLE media ADD COLUMN media_type TEXT")
+    _ensure_column(db, "media", "author", "ALTER TABLE media ADD COLUMN author TEXT")
     _ensure_column(db, "media", "platform", "ALTER TABLE media ADD COLUMN platform TEXT")
     _ensure_column(db, "media", "format", "ALTER TABLE media ADD COLUMN format TEXT")
     _ensure_column(db, "media", "location", "ALTER TABLE media ADD COLUMN location TEXT")
@@ -107,10 +82,45 @@ def init_db() -> None:
     _ensure_column(db, "media", "source_payload", "ALTER TABLE media ADD COLUMN source_payload TEXT")
     _ensure_column(db, "media", "updated_at", "ALTER TABLE media ADD COLUMN updated_at DATETIME")
 
-    # Indexes for speed
-    _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_title ON media(title)")
-    _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)")
-    _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_platform ON media(platform)")
+    db.close()
+
+
+init_db()
+
+MEDIA_SELECT = """
+SELECT
+  id, barcode,
+  title, title_raw, media_type,
+  author, platform, format, location, status, release_year, cover_url,
+  notes,
+  source, source_payload,
+  added_at, updated_at
+FROM media
+"""
+
+
+# -----------------------------
+# Models
+# -----------------------------
+class ScanRequest(BaseModel):
+    barcode: str
+
+
+class MediaUpdate(BaseModel):
+    # All optional; "missing" means do not change
+    title: str | None = None
+    title_raw: str | None = None
+    media_type: str | None = None
+
+    author: str | None = None
+    platform: str | None = None
+    format: str | None = None
+    location: str | None = None
+    status: str | None = None
+    release_year: int | None = None
+    cover_url: str | None = None
+
+    notes: str | None = None
 
 
 # -----------------------------
@@ -120,7 +130,21 @@ def normalize_barcode(raw: str) -> str:
     return "".join(ch for ch in (raw or "") if ch.isdigit())
 
 
-def lookup_isbn_google(isbn: str) -> tuple[str | None, dict[str, Any]]:
+def _join_authors(auths: Any) -> str | None:
+    if not auths:
+        return None
+    if isinstance(auths, str):
+        return auths.strip() or None
+    if isinstance(auths, list):
+        cleaned = [str(a).strip() for a in auths if str(a).strip()]
+        return ", ".join(cleaned) if cleaned else None
+    return str(auths).strip() or None
+
+
+def lookup_isbn_google(isbn: str) -> tuple[str | None, str | None, dict[str, Any]]:
+    """
+    Returns: (title, author, meta)
+    """
     meta: dict[str, Any] = {"path": "isbn", "provider": "google_books"}
     try:
         r = requests.get(
@@ -131,23 +155,27 @@ def lookup_isbn_google(isbn: str) -> tuple[str | None, dict[str, Any]]:
         meta["http_status"] = r.status_code
         if not r.ok:
             meta["message"] = f"HTTP {r.status_code}"
-            return None, meta
+            return None, None, meta
         data = r.json()
         items = data.get("items") or []
         if not items:
             meta["message"] = "No items"
-            return None, meta
-        info = items[0].get("volumeInfo", {})
+            return None, None, meta
+        info = items[0].get("volumeInfo", {}) or {}
         title = info.get("title")
-        meta["picked"] = {"title": title}
-        return title, meta
+        author = _join_authors(info.get("authors"))
+        meta["picked"] = {"title": title, "author": author}
+        return title, author, meta
     except Exception as e:
         meta["http_status"] = None
         meta["message"] = str(e)
-        return None, meta
+        return None, None, meta
 
 
-def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, dict[str, Any]]:
+def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, str | None, dict[str, Any]]:
+    """
+    Returns: (title, author, meta)
+    """
     meta: dict[str, Any] = {"path": "isbn", "provider": "openlibrary"}
     try:
         r = requests.get(
@@ -158,15 +186,37 @@ def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, dict[str, Any]]:
         meta["http_status"] = r.status_code
         if not r.ok:
             meta["message"] = f"HTTP {r.status_code}"
-            return None, meta
+            return None, None, meta
+
         data = r.json()
         title = data.get("title")
-        meta["picked"] = {"title": title}
-        return title, meta
+
+        # openlibrary returns authors as keys -> resolve names
+        author_names: list[str] = []
+        for a in (data.get("authors") or []):
+            key = (a or {}).get("key")
+            if not key:
+                continue
+            try:
+                ar = requests.get(
+                    f"https://openlibrary.org{key}.json",
+                    timeout=7,
+                    headers={"User-Agent": "media-library/1.0"},
+                )
+                if ar.ok:
+                    aname = (ar.json() or {}).get("name")
+                    if aname:
+                        author_names.append(str(aname).strip())
+            except Exception:
+                continue
+
+        author = _join_authors(author_names)
+        meta["picked"] = {"title": title, "author": author}
+        return title, author, meta
     except Exception as e:
         meta["http_status"] = None
         meta["message"] = str(e)
-        return None, meta
+        return None, None, meta
 
 
 def lookup_upc_barcodelookup(code: str) -> tuple[str | None, str, dict[str, Any], dict[str, Any] | None]:
@@ -182,7 +232,7 @@ def lookup_upc_barcodelookup(code: str) -> tuple[str | None, str, dict[str, Any]
     try:
         r = requests.get(
             "https://api.barcodelookup.com/v3/products",
-            params={"barcode": code, "key": BARCODELOOKUP_API_KEY},
+            params={"barcode": code, "formatted": "y", "key": BARCODELOOKUP_API_KEY},
             timeout=10,
             headers={"User-Agent": "media-library/1.0"},
         )
@@ -191,96 +241,88 @@ def lookup_upc_barcodelookup(code: str) -> tuple[str | None, str, dict[str, Any]
             meta["message"] = f"HTTP {r.status_code}"
             return None, "unknown", meta, None
 
-        data = r.json()
+        data = r.json() or {}
         products = data.get("products") or []
         if not products:
             meta["message"] = "No products"
-            return None, "unknown", meta, {"products_count": 0}
+            return None, "unknown", meta, None
 
-        p = products[0]
-        title = p.get("product_name") or p.get("title") or p.get("name")
+        p0 = products[0] or {}
+        title = p0.get("product_name") or p0.get("title") or p0.get("description")
+        category = (p0.get("category") or "").lower()
+        meta["picked"] = {"title": title, "category": p0.get("category")}
 
-        category = (p.get("category") or "").lower()
-        description = (p.get("description") or "").lower()
-        text = f"{category} {description}"
+        inferred = "unknown"
+        if "book" in category:
+            inferred = "book"
+        elif "video game" in category or "game" in category:
+            inferred = "game"
+        elif "dvd" in category or "blu-ray" in category or "movie" in category:
+            inferred = "movie"
 
-        if "video game" in text or "games" in text or "game" in text:
-            inferred_type = "game"
-        elif "movie" in text or "blu-ray" in text or "dvd" in text or "film" in text or "video" in text:
-            inferred_type = "movie"
-        else:
-            inferred_type = "unknown"
-
-        # small payload snippet for debugging/enrichment later (keep it small!)
         payload_snippet = {
-            "product_name": title,
-            "category": p.get("category"),
-            "brand": p.get("brand"),
-            "manufacturer": p.get("manufacturer"),
-            "images": (p.get("images") or [])[:2],
+            "product_name": p0.get("product_name"),
+            "title": p0.get("title"),
+            "category": p0.get("category"),
+            "brand": p0.get("brand"),
+            "manufacturer": p0.get("manufacturer"),
+            "images": p0.get("images"),
         }
-
-        meta["picked"] = {"title": title, "inferred_media_type": inferred_type}
-        return title, inferred_type, meta, payload_snippet
-
+        return title, inferred, meta, payload_snippet
     except Exception as e:
         meta["http_status"] = None
         meta["message"] = str(e)
         return None, "unknown", meta, None
 
 
-def lookup_metadata(code_digits: str) -> tuple[str, str, str, str | None, str | None]:
+def lookup_metadata(code_digits: str) -> tuple[str, str, str, str | None, str, str | None]:
     """
     Returns:
-      title, media_type, source, source_payload_json, lookup_debug_json
+      title, media_type, source, source_payload_json, lookup_debug_json, author
     """
     is_isbn10 = len(code_digits) == 10
     is_isbn13 = len(code_digits) == 13 and code_digits.startswith(("978", "979"))
     is_upc = len(code_digits) == 12
     is_ean13_non_isbn = len(code_digits) == 13 and not is_isbn13
 
-    # Books
+    # Books (ISBN)
     if is_isbn10 or is_isbn13:
         t0 = time.time()
-        title, meta1 = lookup_isbn_google(code_digits)
+
+        title, author, meta1 = lookup_isbn_google(code_digits)
         if title:
             meta1["t_ms"] = int((time.time() - t0) * 1000)
-            return title, "book", "google_books", None, json.dumps(meta1)
+            return title, "book", "google_books", None, json.dumps(meta1), author
 
-        title2, meta2 = lookup_isbn_openlibrary(code_digits)
+        title2, author2, meta2 = lookup_isbn_openlibrary(code_digits)
         meta2["t_ms"] = int((time.time() - t0) * 1000)
         if title2:
-            return title2, "book", "openlibrary", None, json.dumps(meta2)
+            return title2, "book", "openlibrary", None, json.dumps(meta2), author2
 
-        meta2["message"] = "No matching items"
-        return "Unknown Book", "book", "google_books/openlibrary", None, json.dumps(meta2)
+        # Fall back to unknown title but mark type as book (still an ISBN)
+        meta2["message"] = meta2.get("message") or "No title found"
+        return "Unknown Book", "book", "none", None, json.dumps(meta2), None
 
-    # UPC / EAN
+    # UPC/EAN for movies/games/unknown
     if is_upc or is_ean13_non_isbn:
-        title, inferred_type, meta, payload = lookup_upc_barcodelookup(code_digits)
-        source_payload = json.dumps(payload) if payload else None
-        return (title or "Unknown Item"), inferred_type, "barcodelookup", source_payload, json.dumps(meta)
+        title, inferred, meta, payload = lookup_upc_barcodelookup(code_digits)
+        return (
+            title or "Unknown Item",
+            inferred,
+            "barcodelookup" if BARCODELOOKUP_API_KEY else "none",
+            json.dumps(payload) if payload else None,
+            json.dumps(meta),
+            None,
+        )
 
-    return "Unknown Title", "unknown", "none", None, json.dumps(
-        {"path": "unknown", "provider": None, "message": "Barcode format not recognized"}
-    )
+    # Unknown format
+    meta = {"path": "unknown", "provider": "none", "message": "Unrecognized barcode length"}
+    return "Unknown Item", "unknown", "none", None, json.dumps(meta), None
 
 
 # -----------------------------
-# API
+# Endpoints
 # -----------------------------
-MEDIA_SELECT = """
-SELECT
-  id, barcode,
-  title, title_raw, media_type,
-  platform, format, location, status, release_year, cover_url,
-  notes,
-  source, source_payload,
-  added_at, updated_at
-FROM media
-"""
-
-
 @app.post("/scan")
 def scan_barcode(req: ScanRequest) -> dict[str, Any]:
     t0 = time.time()
@@ -292,22 +334,17 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
 
     db = get_db()
 
-    existing = db.execute(
-        MEDIA_SELECT + " WHERE barcode = ?",
-        (normalized,),
-    ).fetchone()
-
+    existing = db.execute(MEDIA_SELECT + " WHERE barcode = ?", (normalized,)).fetchone()
     if existing:
         return {
             "status": "exists",
             "input_barcode": input_barcode,
             "normalized_barcode": normalized,
             "item": dict(existing),
-            "lookup": {"path": "skipped", "t_ms_total": int((time.time() - t0) * 1000)},
             "db": {"inserted": False, "id": existing["id"]},
         }
 
-    title, media_type, source, source_payload, lookup_debug = lookup_metadata(normalized)
+    title, media_type, source, source_payload, lookup_debug, author = lookup_metadata(normalized)
 
     # Store raw title separately so you can clean title later without losing original
     title_raw = title
@@ -317,11 +354,12 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
         """
         INSERT INTO media (
           barcode, title, title_raw, media_type,
+          author,
           source, source_payload
         )
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (normalized, title, title_raw, media_type, source, source_payload),
+        (normalized, title, title_raw, media_type, author, source, source_payload),
     )
     db.commit()
     new_id = cur.lastrowid
@@ -332,14 +370,19 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
         "status": "added",
         "input_barcode": input_barcode,
         "normalized_barcode": normalized,
-        "item": dict(row) if row else {"id": new_id, "barcode": normalized, "title": title, "media_type": media_type},
+        "item": dict(row) if row else {"id": new_id, "barcode": normalized, "title": title, "media_type": media_type, "author": author},
         "lookup": json.loads(lookup_debug) | {"t_ms_total": int((time.time() - t0) * 1000)},
         "db": {"inserted": True, "id": new_id},
     }
 
 
 @app.get("/media")
-def list_media(media_type: str | None = None, search: str | None = None) -> list[dict[str, Any]]:
+def list_media(
+    media_type: str | None = None,
+    search: str | None = None,
+    author: str | None = None,
+    platform: str | None = None,
+) -> list[dict[str, Any]]:
     db = get_db()
     query = MEDIA_SELECT + " WHERE 1=1"
     params: list[Any] = []
@@ -352,7 +395,15 @@ def list_media(media_type: str | None = None, search: str | None = None) -> list
         query += " AND title LIKE ?"
         params.append(f"%{search}%")
 
-    query += " ORDER BY COALESCE(updated_at, added_at) DESC, id DESC"
+    if author:
+        query += " AND author LIKE ?"
+        params.append(f"%{author}%")
+
+    if platform:
+        query += " AND platform LIKE ?"
+        params.append(f"%{platform}%")
+
+    query += " ORDER BY added_at DESC, id DESC"
     rows = db.execute(query, params).fetchall()
     return [dict(r) for r in rows]
 
@@ -387,6 +438,8 @@ def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
     if patch.media_type is not None:
         add("media_type", patch.media_type)
 
+    if patch.author is not None:
+        add("author", patch.author)
     if patch.platform is not None:
         add("platform", patch.platform)
     if patch.format is not None:
@@ -399,7 +452,6 @@ def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
         add("release_year", patch.release_year)
     if patch.cover_url is not None:
         add("cover_url", patch.cover_url)
-
     if patch.notes is not None:
         add("notes", patch.notes)
 

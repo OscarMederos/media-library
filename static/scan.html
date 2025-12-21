@@ -94,6 +94,7 @@
     <div class="kv"><span class="k">Result:</span><span id="srResult" class="v muted">—</span></div>
     <div class="kv"><span class="k">Title:</span><span id="srTitle" class="v muted">—</span></div>
     <div class="kv"><span class="k">Type:</span><span id="srType" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Author:</span><span id="srAuthor" class="v muted">—</span></div>
     <div class="kv"><span class="k">ID:</span><span id="srId" class="v muted">—</span></div>
 
     <!-- Optional details (same format) -->
@@ -121,6 +122,7 @@
     const srResult = document.getElementById("srResult");
     const srTitle = document.getElementById("srTitle");
     const srType = document.getElementById("srType");
+    const srAuthor = document.getElementById("srAuthor");
     const srId = document.getElementById("srId");
     const srBarcode = document.getElementById("srBarcode");
     const srSource = document.getElementById("srSource");
@@ -157,6 +159,7 @@
       setText(srResult, "—");
       setText(srTitle, "—");
       setText(srType, "—");
+      setText(srAuthor, "—");
       setText(srId, "—");
       setText(srBarcode, "—");
       setText(srSource, "—");
@@ -222,6 +225,7 @@
           setText(srResult, "saving…", "muted");
           setText(srTitle, "—");
           setText(srType, "—");
+          setText(srAuthor, "—");
           setText(srId, "—");
           setText(srBarcode, "—");
           setText(srSource, "—");
@@ -246,7 +250,7 @@
             }
 
             // Expected FastAPI response shape:
-            // { status, normalized_barcode, item: { id, title, media_type, platform, source, ... } }
+            // { status, normalized_barcode, item: { id, title, media_type, author, platform, source, ... } }
             const resultStatus = data?.status || "ok";
             const item = data?.item || {};
 
@@ -255,6 +259,7 @@
             setText(srResult, resultStatus, resultStatus === "added" ? "ok" : "muted");
             setText(srTitle, item.title, "ok");
             setText(srType, item.media_type || "unknown", "muted");
+            setText(srAuthor, (item.media_type === "book" ? (item.author || "—") : "—"), "muted");
             setText(srId, item.id, "muted");
 
             setText(srBarcode, data.normalized_barcode || item.barcode, "muted");
@@ -280,6 +285,13 @@
     stopBtn.addEventListener("click", stopCamera);
     window.addEventListener("online", updateNet);
     window.addEventListener("offline", updateNet);
+
+    // service worker (optional)
+    (function registerSW() {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
+      }
+    })();
 
     updateNet();
     setStatus("Ready. Tap Start Camera.", "muted");

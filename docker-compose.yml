@@ -7,5 +7,5 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/data
-    environment:
-      BARCODELOOKUP_API_KEY: xxx
+env_file:
+  - .env

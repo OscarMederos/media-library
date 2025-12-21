@@ -7,7 +7,6 @@
   <style>
     body { font-family: system-ui, sans-serif; background:#0f0f0f; color:#fff; margin:0; padding:1rem; }
     h2 { margin: .25rem 0 1rem; }
-
     .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; align-items:center; }
     input, select { padding:.6rem; border-radius:10px; border:none; font-size:1rem; }
     input { flex: 2; min-width: 180px; }
@@ -15,13 +14,8 @@
     button { padding:.6rem .9rem; border-radius:10px; border:0; font-size:1rem; }
     #scanBtn { background:#4caf50; color:#000; }
     #refreshBtn { background:#1e88e5; color:#fff; }
-    #bulkBtn { background:#7e57c2; color:#fff; }
     .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
-
-    .toggle {
-      display:flex; align-items:center; gap:.4rem;
-      padding:.55rem .8rem; border-radius:10px; background:#1c1c1c;
-    }
+    .toggle { display:flex; align-items:center; gap:.4rem; padding:.55rem .8rem; border-radius:10px; background:#1c1c1c; }
     .toggle input { transform: scale(1.2); }
 
     .item { background:#1c1c1c; padding:.85rem; border-radius:12px; margin-bottom:.6rem; }
@@ -36,16 +30,8 @@
 
     .empty { color:#777; text-align:center; margin-top:2rem; }
 
-    /* Modal */
-    .modalBackdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,.6);
-      display:none; align-items:center; justify-content:center; padding:1rem;
-    }
-    .modal {
-      width: 100%; max-width: 720px;
-      background:#1c1c1c; border-radius:14px; padding:1rem;
-      box-shadow: 0 10px 30px rgba(0,0,0,.5);
-    }
+    .modalBackdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:1rem; }
+    .modal { width: 100%; max-width: 820px; background:#1c1c1c; border-radius:14px; padding:1rem; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
     .modal h3 { margin: 0 0 .75rem; }
     .grid { display:grid; grid-template-columns: 1fr; gap:.6rem; }
     .grid label { font-size:.9rem; color:#bbb; }
@@ -54,20 +40,26 @@
     .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:.6rem; }
     .row3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:.6rem; }
     @media (max-width: 520px) { .row2, .row3 { grid-template-columns: 1fr; } }
-
     .modalActions { display:flex; gap:.5rem; justify-content:flex-end; margin-top: .8rem; flex-wrap: wrap; }
     .save { background:#4caf50; color:#000; }
     .cancel { background:#444; color:#fff; }
     .apply { background:#26a69a; color:#000; }
-    .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
 
+    .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
+    .diff { background:#151515; padding:.7rem; border-radius:12px; }
     .kv { margin-top:.35rem; }
     .k { font-weight:650; }
     .v { color:#ddd; }
-    .diff { background:#151515; padding:.7rem; border-radius:12px; }
+
+    .cand { background:#121212; border-radius:12px; padding:.7rem; margin-top:.6rem; display:flex; gap:.7rem; align-items:flex-start; }
+    .cand img { width:64px; height:86px; object-fit:cover; border-radius:8px; background:#000; }
+    .cand .cmeta { flex: 1; }
+    .cand .ctitle { font-weight:700; margin-bottom:.15rem; }
+    .cand .csub { color:#aaa; font-size:.9rem; margin-bottom:.25rem; }
+    .cand .cplats { color:#888; font-size:.85rem; }
+    .cand input { transform: scale(1.2); margin-top:.25rem; }
   </style>
 </head>
-
 <body>
   <h2>📚 My Library <span id="net" class="pill">…</span></h2>
 
@@ -87,7 +79,6 @@
     </div>
 
     <button id="refreshBtn">Refresh</button>
-    <button id="bulkBtn">Bulk Normalize (50)</button>
     <button id="scanBtn" onclick="location.href='/ui/scan.html'">Scan</button>
   </div>
 
@@ -172,13 +163,11 @@
     </div>
   </div>
 
-  <!-- Normalize Preview Modal -->
+  <!-- Normalize Modal -->
   <div id="normBackdrop" class="modalBackdrop">
     <div class="modal">
-      <h3>Normalize Preview</h3>
-
+      <h3 id="normTitle">Normalize Preview</h3>
       <div id="normBody" class="diff"></div>
-
       <div class="modalActions">
         <button class="cancel" id="normCancelBtn">Cancel</button>
         <button class="apply" id="normApplyBtn">Apply</button>
@@ -192,10 +181,8 @@
     const filterEl = document.getElementById("filter");
     const needsReviewEl = document.getElementById("needsReview");
     const refreshBtn = document.getElementById("refreshBtn");
-    const bulkBtn = document.getElementById("bulkBtn");
     const netEl = document.getElementById("net");
 
-    // Edit modal elements
     const editBackdrop = document.getElementById("editBackdrop");
     const mTitle = document.getElementById("mTitle");
     const mTitleRaw = document.getElementById("mTitleRaw");
@@ -211,44 +198,42 @@
     const editCancelBtn = document.getElementById("editCancelBtn");
     const editSaveBtn = document.getElementById("editSaveBtn");
 
-    // Normalize modal elements
     const normBackdrop = document.getElementById("normBackdrop");
+    const normTitleEl = document.getElementById("normTitle");
     const normBody = document.getElementById("normBody");
     const normCancelBtn = document.getElementById("normCancelBtn");
     const normApplyBtn = document.getElementById("normApplyBtn");
 
     let currentItems = [];
     let editingItem = null;
-    let normalizeTargetId = null;
-    let normalizeProposed = null;
 
-    function updateNet() {
-      netEl.textContent = navigator.onLine ? "online" : "offline";
-    }
+    let normalizeTarget = null;     // item object
+    let normalizeMode = null;       // "game" | "other"
+    let normalizeState = null;      // payload from preview
+    let selectedIgdbId = null;
+
+    function updateNet() { netEl.textContent = navigator.onLine ? "online" : "offline"; }
 
     function escapeHtml(s) {
       return String(s ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+        .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
     }
-
     function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
 
     function looksNeedsReview(item) {
-      const t = String(item.title || "");
+      const t = String(item.title || "").toLowerCase();
       const mt = String(item.media_type || "unknown");
-      const plat = String(item.platform || "");
-      const fmtv = String(item.format || "");
-
-      const unknownTitle = t.toLowerCase().startsWith("unknown");
+      const unknownTitle = t.startsWith("unknown");
       const unknownType = mt === "unknown" || mt === "";
-      const hasMarkers = t.includes("(") || t.includes("[") || t.includes(" - ") || t.includes(" – ") || t.includes(" — ");
-      const missingPlatOrFmt = (!plat || !fmtv);
-
-      // "Needs review": unknown OR has markers suggesting extractable platform/format OR missing plat/fmt but markers exist
+      const hasMarkers = (item.title || "").includes("(") || (item.title || "").includes("[") ||
+                         (item.title || "").includes(" - ") || (item.title || "").includes(" – ") || (item.title || "").includes(" — ");
+      const missingPlatOrFmt = !(item.platform || "") || !(item.format || "");
+      // For games: review if unknown title/type OR markers exist OR missing cover/year (optional)
+      if (mt === "game") {
+        return unknownTitle || unknownType || hasMarkers || !(item.cover_url || "") || !(item.release_year || "");
+      }
+      // For others: review if unknown OR markers exist and missing plat/fmt
       return unknownTitle || unknownType || (hasMarkers && missingPlatOrFmt);
     }
 
@@ -258,7 +243,6 @@
         listEl.innerHTML = `<div class="empty">No media found</div>`;
         return;
       }
-
       for (const item of items) {
         const div = document.createElement("div");
         div.className = "item";
@@ -275,7 +259,7 @@
           <div class="meta">${escapeHtml(type)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
-            <button class="norm">Normalize</button>
+            <button class="norm">${type === "game" ? "Normalize (IGDB)" : "Normalize"}</button>
             <button class="edit">Edit</button>
             <button class="del">Delete</button>
           </div>
@@ -300,12 +284,8 @@
 
     function applyClientFilters(items) {
       let out = items;
+      if (needsReviewEl.checked) out = out.filter(looksNeedsReview);
 
-      if (needsReviewEl.checked) {
-        out = out.filter(looksNeedsReview);
-      }
-
-      // Client-side search/filter is already handled server-side, but keep it safe if offline later
       const q = (searchEl.value || "").trim().toLowerCase();
       if (q) out = out.filter(i => String(i.title || "").toLowerCase().includes(q));
 
@@ -330,43 +310,32 @@
     function openEdit(id) {
       const item = currentItems.find(x => x.id === id);
       if (!item) return;
-
       editingItem = item;
 
       mTitle.value = item.title ?? "";
       mTitleRaw.value = item.title_raw ?? "";
       mType.value = item.media_type ?? "unknown";
-
       mPlatform.value = item.platform ?? "";
       mFormat.value = item.format ?? "";
       mYear.value = item.release_year ?? "";
-
       mLocation.value = item.location ?? "";
       mStatus.value = item.status ?? "";
-
       mCoverUrl.value = item.cover_url ?? "";
       mNotes.value = item.notes ?? "";
 
-      mMeta.textContent =
-        `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
-
+      mMeta.textContent = `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
       editBackdrop.style.display = "flex";
     }
 
-    function closeEdit() {
-      editBackdrop.style.display = "none";
-      editingItem = null;
-    }
+    function closeEdit() { editBackdrop.style.display = "none"; editingItem = null; }
 
     async function saveEdit() {
       if (!editingItem) return;
-
       const yearVal = mYear.value.trim();
       const patch = {
         title: mTitle.value,
         title_raw: mTitleRaw.value,
         media_type: mType.value,
-
         platform: mPlatform.value,
         format: mFormat.value,
         location: mLocation.value,
@@ -383,10 +352,8 @@
           body: JSON.stringify(patch)
         });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
-
         const data = await resp.json();
         const updated = data.item;
-
         currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
         render(applyClientFilters(currentItems));
         closeEdit();
@@ -403,7 +370,6 @@
       try {
         const resp = await fetch(`/media/${id}`, { method: "DELETE" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
-
         currentItems = currentItems.filter(x => x.id !== id);
         render(applyClientFilters(currentItems));
       } catch (e) {
@@ -414,31 +380,28 @@
     function closeNormalize() {
       normBackdrop.style.display = "none";
       normBody.innerHTML = "";
-      normalizeTargetId = null;
-      normalizeProposed = null;
+      normalizeTarget = null;
+      normalizeMode = null;
+      normalizeState = null;
+      selectedIgdbId = null;
     }
 
-    function renderNormalizePreview(current, proposed) {
+    function renderKeyValue(label, curVal, newVal) {
+      return `
+        <div class="kv"><span class="k">${escapeHtml(label)}:</span>
+          <span class="v">${escapeHtml(fmt(curVal))}</span>
+          &nbsp;→&nbsp;
+          <span class="v">${escapeHtml(fmt(newVal))}</span>
+        </div>
+      `;
+    }
+
+    function renderOtherPreview(current, proposed) {
       const rows = [];
-
-      function addRow(label, curVal, newVal) {
-        rows.push(`
-          <div class="kv"><span class="k">${escapeHtml(label)}:</span>
-            <span class="v">${escapeHtml(fmt(curVal))}</span>
-            &nbsp;→&nbsp;
-            <span class="v">${escapeHtml(fmt(newVal))}</span>
-          </div>
-        `);
-      }
-
-      if ("title" in proposed) addRow("Title", current.title, proposed.title);
-      if ("platform" in proposed) addRow("Platform", current.platform, proposed.platform);
-      if ("format" in proposed) addRow("Format", current.format, proposed.format);
-
-      if (!rows.length) {
-        return `<div class="kv">No normalization changes suggested.</div>`;
-      }
-
+      if ("title" in proposed) rows.push(renderKeyValue("Title", current.title, proposed.title));
+      if ("platform" in proposed) rows.push(renderKeyValue("Platform", current.platform, proposed.platform));
+      if ("format" in proposed) rows.push(renderKeyValue("Format", current.format, proposed.format));
+      if (!rows.length) return `<div class="kv">No normalization changes suggested.</div>`;
       return `
         <div class="kv"><span class="k">Item:</span> <span class="v">${escapeHtml(current.title)} (id:${current.id})</span></div>
         <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
@@ -446,8 +409,91 @@
       `;
     }
 
+    function renderGamePreview(payload) {
+      const cur = payload.current;
+      const best = payload.proposed_best_guess || {};
+      const cands = payload.candidates || [];
+
+      const rows = [];
+      if ("title" in best) rows.push(renderKeyValue("Title", cur.title, best.title));
+      if ("platform" in best) rows.push(renderKeyValue("Platform", cur.platform, best.platform));
+      if ("format" in best) rows.push(renderKeyValue("Format", cur.format, best.format));
+      if ("release_year" in best) rows.push(renderKeyValue("Release year", cur.release_year, best.release_year));
+      if ("cover_url" in best) rows.push(renderKeyValue("Cover URL", cur.cover_url, best.cover_url));
+
+      let html = `
+        <div class="kv"><span class="k">Item:</span> <span class="v">${escapeHtml(cur.title)} (id:${cur.id})</span></div>
+        <div class="kv"><span class="k">Search title:</span> <span class="v">${escapeHtml(payload.stripped_title || cur.title)}</span></div>
+        <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
+        ${rows.length ? rows.join("") : `<div class="kv">No best-guess changes suggested.</div>`}
+        <hr style="border:0;border-top:1px solid #333;margin:.75rem 0;">
+        <div class="kv"><span class="k">Choose the correct IGDB match:</span></div>
+      `;
+
+      if (!cands.length) {
+        html += `<div class="kv">No IGDB candidates returned. (Check IGDB env vars and network.)</div>`;
+        return html;
+      }
+
+      html += cands.map((c, idx) => {
+        const id = c.igdb_id;
+        const checked = (idx === 0) ? "checked" : "";
+        const plats = (c.platforms || []).slice(0, 8).join(", ");
+        return `
+          <div class="cand">
+            ${c.cover_url ? `<img src="${escapeHtml(c.cover_url)}" alt="cover">` : `<img src="" alt="cover" style="visibility:hidden;">`}
+            <div class="cmeta">
+              <div class="ctitle">${escapeHtml(c.name)}</div>
+              <div class="csub">IGDB ID: ${escapeHtml(id)} • Year: ${escapeHtml(fmt(c.release_year))}</div>
+              <div class="cplats">Platforms: ${escapeHtml(plats || "—")}</div>
+            </div>
+            <div>
+              <input type="radio" name="igdbPick" value="${escapeHtml(id)}" ${checked}/>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      return html;
+    }
+
     async function openNormalize(id) {
+      const item = currentItems.find(x => x.id === id);
+      if (!item) return;
+      normalizeTarget = item;
+
       try {
+        if ((item.media_type || "unknown") === "game") {
+          normalizeMode = "game";
+          normTitleEl.textContent = "Normalize Game (IGDB)";
+          const resp = await fetch(`/normalize_game/${id}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dry_run: true })
+          });
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          const data = await resp.json();
+          normalizeState = data;
+
+          normBody.innerHTML = renderGamePreview(data);
+          normBackdrop.style.display = "flex";
+
+          // default selection
+          const first = normBody.querySelector('input[name="igdbPick"]');
+          selectedIgdbId = first ? parseInt(first.value, 10) : null;
+
+          normBody.querySelectorAll('input[name="igdbPick"]').forEach(r => {
+            r.addEventListener("change", () => {
+              selectedIgdbId = parseInt(r.value, 10);
+            });
+          });
+
+          return;
+        }
+
+        // non-game
+        normalizeMode = "other";
+        normTitleEl.textContent = "Normalize Preview";
         const resp = await fetch(`/normalize/${id}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -461,55 +507,54 @@
           return;
         }
 
-        normalizeTargetId = id;
-        normalizeProposed = data.proposed;
-
-        normBody.innerHTML = renderNormalizePreview(data.current, data.proposed);
+        normalizeState = data;
+        normBody.innerHTML = renderOtherPreview(data.current, data.proposed);
         normBackdrop.style.display = "flex";
+
       } catch (e) {
         alert("Normalize preview failed: " + e);
       }
     }
 
     async function applyNormalize() {
-      if (!normalizeTargetId) return;
+      if (!normalizeTarget) return;
+
       try {
-        const resp = await fetch(`/normalize/${normalizeTargetId}`, {
+        if (normalizeMode === "game") {
+          if (!selectedIgdbId) {
+            alert("Pick an IGDB candidate first.");
+            return;
+          }
+          const resp = await fetch(`/normalize_game/${normalizeTarget.id}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dry_run: false, igdb_id: selectedIgdbId })
+          });
+          if (!resp.ok) throw new Error("HTTP " + resp.status);
+          const data = await resp.json();
+
+          const updated = data.item;
+          currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
+          render(applyClientFilters(currentItems));
+          closeNormalize();
+          return;
+        }
+
+        // non-game apply
+        const resp = await fetch(`/normalize/${normalizeTarget.id}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dry_run: false })
         });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
-
-        if (data.status !== "applied") {
-          alert("Unexpected normalize result: " + JSON.stringify(data));
-          return;
-        }
-
         const updated = data.item;
         currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
         render(applyClientFilters(currentItems));
         closeNormalize();
+
       } catch (e) {
         alert("Normalize apply failed: " + e);
-      }
-    }
-
-    async function bulkNormalize() {
-      if (!confirm("Run bulk normalize for up to 50 items that look like they have platform/format in the title?")) return;
-      try {
-        const resp = await fetch(`/normalize?limit=50`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dry_run: false })
-        });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const data = await resp.json();
-        alert(`Bulk normalization completed. Updated: ${data.count}`);
-        await load();
-      } catch (e) {
-        alert("Bulk normalize failed: " + e);
       }
     }
 
@@ -523,8 +568,6 @@
     normBackdrop.addEventListener("click", (e) => { if (e.target === normBackdrop) closeNormalize(); });
 
     refreshBtn.addEventListener("click", load);
-    bulkBtn.addEventListener("click", bulkNormalize);
-
     searchEl.addEventListener("input", () => render(applyClientFilters(currentItems)));
     filterEl.addEventListener("change", () => load());
     needsReviewEl.addEventListener("change", () => render(applyClientFilters(currentItems)));

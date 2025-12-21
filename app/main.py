@@ -12,15 +12,16 @@ from typing import Any
 DB_PATH = os.getenv("DB_PATH", "/data/media.db")
 BARCODELOOKUP_API_KEY = os.getenv("BARCODELOOKUP_API_KEY")
 
-app = FastAPI()
+IGDB_CLIENT_ID = os.getenv("IGDB_CLIENT_ID")
+IGDB_CLIENT_SECRET = os.getenv("IGDB_CLIENT_SECRET")
 
+app = FastAPI()
 
 # -----------------------------
 # Models
 # -----------------------------
 class ScanRequest(BaseModel):
     barcode: str
-
 
 class MediaUpdate(BaseModel):
     title: str | None = None
@@ -36,10 +37,12 @@ class MediaUpdate(BaseModel):
 
     notes: str | None = None
 
-
 class NormalizeRequest(BaseModel):
     dry_run: bool = True
 
+class NormalizeGameRequest(BaseModel):
+    dry_run: bool = True
+    igdb_id: int | None = None  # required when dry_run=false
 
 # -----------------------------
 # DB helpers
@@ -49,18 +52,15 @@ def get_db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     return conn
 
-
 def _ensure_column(db: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     cols = [r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]
     if column not in cols:
         db.execute(ddl)
         db.commit()
 
-
 def _ensure_index(db: sqlite3.Connection, ddl: str) -> None:
     db.execute(ddl)
     db.commit()
-
 
 @app.on_event("startup")
 def init_db() -> None:
@@ -95,7 +95,6 @@ def init_db() -> None:
     )
     db.commit()
 
-    # Auto-migrate older DBs
     _ensure_column(db, "media", "title_raw", "ALTER TABLE media ADD COLUMN title_raw TEXT")
     _ensure_column(db, "media", "platform", "ALTER TABLE media ADD COLUMN platform TEXT")
     _ensure_column(db, "media", "format", "ALTER TABLE media ADD COLUMN format TEXT")
@@ -108,19 +107,16 @@ def init_db() -> None:
     _ensure_column(db, "media", "source_payload", "ALTER TABLE media ADD COLUMN source_payload TEXT")
     _ensure_column(db, "media", "updated_at", "ALTER TABLE media ADD COLUMN updated_at DATETIME")
 
-    # Indexes
     _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_title ON media(title)")
     _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)")
     _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_platform ON media(platform)")
     _ensure_index(db, "CREATE INDEX IF NOT EXISTS idx_media_format ON media(format)")
 
-
 # -----------------------------
-# Lookup helpers
+# Lookup helpers (existing)
 # -----------------------------
 def normalize_barcode(raw: str) -> str:
     return "".join(ch for ch in (raw or "") if ch.isdigit())
-
 
 def lookup_isbn_google(isbn: str) -> tuple[str | None, dict[str, Any]]:
     meta: dict[str, Any] = {"path": "isbn", "provider": "google_books"}
@@ -148,7 +144,6 @@ def lookup_isbn_google(isbn: str) -> tuple[str | None, dict[str, Any]]:
         meta["message"] = str(e)
         return None, meta
 
-
 def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, dict[str, Any]]:
     meta: dict[str, Any] = {"path": "isbn", "provider": "openlibrary"}
     try:
@@ -169,7 +164,6 @@ def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, dict[str, Any]]:
         meta["http_status"] = None
         meta["message"] = str(e)
         return None, meta
-
 
 def lookup_upc_barcodelookup(code: str) -> tuple[str | None, str, dict[str, Any], dict[str, Any] | None]:
     meta: dict[str, Any] = {"path": "upc/ean", "provider": "barcodelookup"}
@@ -226,11 +220,7 @@ def lookup_upc_barcodelookup(code: str) -> tuple[str | None, str, dict[str, Any]
         meta["message"] = str(e)
         return None, "unknown", meta, None
 
-
 def lookup_metadata(code_digits: str) -> tuple[str, str, str, str | None, str | None]:
-    """
-    Returns: title, media_type, source, source_payload_json, lookup_debug_json
-    """
     is_isbn10 = len(code_digits) == 10
     is_isbn13 = len(code_digits) == 13 and code_digits.startswith(("978", "979"))
     is_upc = len(code_digits) == 12
@@ -260,50 +250,33 @@ def lookup_metadata(code_digits: str) -> tuple[str, str, str, str | None, str | 
         {"path": "unknown", "provider": None, "message": "Barcode format not recognized"}
     )
 
-
 # -----------------------------
-# Normalization helpers
+# Normalization helpers (movies/books stay)
 # -----------------------------
-PLATFORM_PATTERNS = [
+PLATFORM_MARKERS = [
     (re.compile(r"\bPS5\b", re.I), "PS5"),
     (re.compile(r"\bPS4\b", re.I), "PS4"),
     (re.compile(r"\bPS3\b", re.I), "PS3"),
     (re.compile(r"\bPS2\b", re.I), "PS2"),
     (re.compile(r"\bPS1\b|\bPlayStation\b", re.I), "PS1"),
-    (re.compile(r"\bSwitch\b|\bNintendo Switch\b", re.I), "Switch"),
+    (re.compile(r"\bNintendo Switch\b|\bSwitch\b", re.I), "Switch"),
     (re.compile(r"\bWii U\b", re.I), "Wii U"),
     (re.compile(r"\bWii\b", re.I), "Wii"),
     (re.compile(r"\bGameCube\b", re.I), "GameCube"),
-    (re.compile(r"\bN64\b|\bNintendo 64\b", re.I), "N64"),
-    (re.compile(r"\bSNES\b|\bSuper Nintendo\b", re.I), "SNES"),
-    (re.compile(r"\bNES\b", re.I), "NES"),
     (re.compile(r"\bXbox Series X\b|\bXbox Series\b|\bXSX\b", re.I), "Xbox Series X"),
     (re.compile(r"\bXbox One\b", re.I), "Xbox One"),
     (re.compile(r"\bXbox 360\b", re.I), "Xbox 360"),
-    (re.compile(r"\bXbox\b", re.I), "Xbox"),
     (re.compile(r"\bPC\b|\bWindows\b", re.I), "PC"),
 ]
 
-FORMAT_PATTERNS = [
+FORMAT_MARKERS = [
     (re.compile(r"\b4K\b|\bUHD\b|\bUltra HD\b", re.I), "4K"),
     (re.compile(r"\bBlu[- ]?ray\b", re.I), "Blu-ray"),
     (re.compile(r"\bDVD\b", re.I), "DVD"),
     (re.compile(r"\bVHS\b", re.I), "VHS"),
-    (re.compile(r"\bDigital\b", re.I), "Digital"),
-    (re.compile(r"\bCartridge\b|\bCart\b", re.I), "Cartridge"),
-    (re.compile(r"\bDisc\b", re.I), "Disc"),
 ]
 
-# Used to remove platform/format tokens from title
-PLATFORM_TOKEN_RXS = [rx for (rx, _plat) in PLATFORM_PATTERNS]
-FORMAT_TOKEN_RXS = [rx for (rx, _fmt) in FORMAT_PATTERNS]
-
-
 def _strip_suffix_wrapper(title: str) -> tuple[str, str | None]:
-    """
-    If title ends in "(...)" or "[...]" return (cleaned_title, inner_text)
-    else return (title, None)
-    """
     t = title.strip()
     m = re.search(r"[\(\[]\s*([^\)\]]+?)\s*[\)\]]\s*$", t)
     if not m:
@@ -312,25 +285,14 @@ def _strip_suffix_wrapper(title: str) -> tuple[str, str | None]:
     cleaned = re.sub(r"[\(\[]\s*([^\)\]]+?)\s*[\)\]]\s*$", "", t).rstrip(" -–—:").strip()
     return cleaned, inner
 
-
 def _strip_prefix_wrapper(title: str) -> tuple[str, str | None]:
-    """
-    If title begins with "[...]" or "(...)" return (rest, inner_text)
-    else return (title, None)
-    """
     t = title.strip()
     m = re.match(r"^\s*[\(\[]\s*([^\)\]]+?)\s*[\)\]]\s*(.+)$", t)
     if not m:
         return t, None
-    inner = m.group(1).strip()
-    rest = m.group(2).strip()
-    return rest, inner
-
+    return m.group(2).strip(), m.group(1).strip()
 
 def _strip_dash_suffix(title: str) -> tuple[str, str | None]:
-    """
-    If title ends with "- something" return (cleaned, suffix)
-    """
     t = title.strip()
     m = re.search(r"\s*[-–—:]\s*(.+)\s*$", t)
     if not m:
@@ -339,101 +301,149 @@ def _strip_dash_suffix(title: str) -> tuple[str, str | None]:
     cleaned = re.sub(r"\s*[-–—:]\s*(.+)\s*$", "", t).strip()
     return cleaned, suffix
 
-
-def _detect_platform(text: str) -> str | None:
+def _detect_from_marker(text: str, patterns: list[tuple[re.Pattern, str]]) -> str | None:
     if not text:
         return None
-    for rx, plat in PLATFORM_PATTERNS:
+    for rx, val in patterns:
         if rx.search(text):
-            return plat
+            return val
     return None
 
-
-def _detect_format(text: str) -> str | None:
-    if not text:
-        return None
-    for rx, fmt in FORMAT_PATTERNS:
-        if rx.search(text):
-            return fmt
-    return None
-
-
-def _remove_known_tokens(title: str, platform: str | None, fmt: str | None) -> str:
+def normalize_title_extract_markers_only(title: str) -> tuple[str, str | None, str | None]:
     """
-    If we inferred platform/format, remove obvious tokens from the title.
-    We keep it conservative: remove bracketed/dash suffix markers and obvious occurrences.
-    """
-    t = title
-
-    # Common cleanup: collapse whitespace
-    t = re.sub(r"\s+", " ", t).strip()
-
-    # Remove stray double separators
-    t = t.strip(" -–—:")
-
-    # If we inferred platform, try removing platform tokens if they appear in obvious contexts
-    if platform:
-        # Remove occurrences like " (PS5)" or " - PS5" already handled by wrapper/dash stripping,
-        # but also remove leftover platform tokens anywhere that are standalone words.
-        for rx in PLATFORM_TOKEN_RXS:
-            t = rx.sub("", t)
-
-    if fmt:
-        for rx in FORMAT_TOKEN_RXS:
-            t = rx.sub("", t)
-
-    # Normalize after token removal
-    t = re.sub(r"\s+", " ", t).strip()
-    t = re.sub(r"\s+([:;,\-–—])\s+", r" \1 ", t).strip()
-    t = t.strip(" -–—:").strip()
-
-    return t
-
-
-def normalize_title_move_platform_format(title: str) -> tuple[str, str | None, str | None]:
-    """
-    Returns (new_title, platform_or_None, format_or_None)
-
-    Priority:
-      1) parse suffix wrapper (Title (PS5)) / prefix wrapper ([PS5] Title)
-      2) parse dash suffix (Title - PS5)
-      3) infer platform/format from title text (conservative)
+    IMPORTANT: This does NOT infer platform/format from random words inside the title.
+    It only extracts when platform/format appear as explicit markers:
+      - suffix: "Title (PS5)" or "Title [PS5]"
+      - prefix: "[PS5] Title"
+      - dash suffix: "Title - PS5"
     """
     if not title:
         return title, None, None
 
     original = title.strip()
+    plat = None
+    fmt = None
 
-    # Start with wrapper/dash parsing
     t1, inner1 = _strip_suffix_wrapper(original)
-    plat = _detect_platform(inner1 or "")
-    fmt = _detect_format(inner1 or "")
+    if inner1:
+        plat = _detect_from_marker(inner1, PLATFORM_MARKERS)
+        fmt = _detect_from_marker(inner1, FORMAT_MARKERS)
+        if plat or fmt:
+            return t1, plat, fmt
 
-    # Prefix wrapper if suffix wasn't present
-    t2 = t1
-    if inner1 is None:
-        t2, inner2 = _strip_prefix_wrapper(original)
-        plat = plat or _detect_platform(inner2 or "")
-        fmt = fmt or _detect_format(inner2 or "")
+    t2, inner2 = _strip_prefix_wrapper(original)
+    if inner2:
+        plat = _detect_from_marker(inner2, PLATFORM_MARKERS)
+        fmt = _detect_from_marker(inner2, FORMAT_MARKERS)
+        if plat or fmt:
+            return t2, plat, fmt
 
-    # Dash suffix if still no wrapper extraction
-    t3 = t2
-    if inner1 is None:
-        t3, suffix = _strip_dash_suffix(t2)
-        plat = plat or _detect_platform(suffix or "")
-        fmt = fmt or _detect_format(suffix or "")
+    t3, suffix = _strip_dash_suffix(original)
+    if suffix:
+        plat = _detect_from_marker(suffix, PLATFORM_MARKERS)
+        fmt = _detect_from_marker(suffix, FORMAT_MARKERS)
+        if plat or fmt:
+            return t3, plat, fmt
 
-    # If still not found, infer conservatively from the title (do not over-strip)
-    plat = plat or _detect_platform(original)
-    fmt = fmt or _detect_format(original)
+    return original, None, None
 
-    new_title = _remove_known_tokens(t3, plat, fmt)
+# -----------------------------
+# IGDB client (games normalization)
+# -----------------------------
+_igdb_token: str | None = None
+_igdb_token_exp: float = 0.0  # epoch seconds
 
-    # final whitespace normalize
-    new_title = re.sub(r"\s+", " ", new_title).strip()
+def _igdb_get_app_token() -> str:
+    """
+    Gets/refreshes Twitch app access token for IGDB.
+    Uses client credential flow (client_id + client_secret).
+    """
+    global _igdb_token, _igdb_token_exp
 
-    return new_title or original, plat, fmt
+    if not IGDB_CLIENT_ID or not IGDB_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="IGDB_CLIENT_ID/IGDB_CLIENT_SECRET not set")
 
+    now = time.time()
+    if _igdb_token and now < (_igdb_token_exp - 60):
+        return _igdb_token
+
+    # Twitch token endpoint for app access token (client credentials). :contentReference[oaicite:2]{index=2}
+    r = requests.post(
+        "https://id.twitch.tv/oauth2/token",
+        params={
+            "client_id": IGDB_CLIENT_ID,
+            "client_secret": IGDB_CLIENT_SECRET,
+            "grant_type": "client_credentials",
+        },
+        timeout=10,
+        headers={"User-Agent": "media-library/1.0"},
+    )
+    if not r.ok:
+        raise HTTPException(status_code=500, detail=f"Failed to get Twitch token: HTTP {r.status_code}")
+
+    data = r.json()
+    token = data.get("access_token")
+    expires_in = int(data.get("expires_in") or 0)
+    if not token or expires_in <= 0:
+        raise HTTPException(status_code=500, detail="Invalid Twitch token response")
+
+    _igdb_token = token
+    _igdb_token_exp = now + expires_in
+    return token
+
+def _igdb_post(endpoint: str, body: str) -> list[dict[str, Any]]:
+    token = _igdb_get_app_token()
+    # IGDB v4 endpoints are POST with body DSL: `search "..."; fields ...; limit ...;` :contentReference[oaicite:3]{index=3}
+    r = requests.post(
+        f"https://api.igdb.com/v4/{endpoint}",
+        data=body.encode("utf-8"),
+        timeout=10,
+        headers={
+            "Client-ID": IGDB_CLIENT_ID,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "media-library/1.0",
+        },
+    )
+    if not r.ok:
+        raise HTTPException(status_code=500, detail=f"IGDB request failed: HTTP {r.status_code}")
+    return r.json() if r.text else []
+
+def _igdb_candidates_for_title(title: str, limit: int = 8) -> list[dict[str, Any]]:
+    # Escape quotes for IGDB search string
+    q = (title or "").replace('"', '\\"').strip()
+    if not q:
+        return []
+
+    # We fetch platforms.name to show you options; but we won't auto-set owned platform.
+    body = f'''
+search "{q}";
+fields id,name,first_release_date,cover.image_id,platforms.name;
+limit {limit};
+'''
+    games = _igdb_post("games", body)
+
+    out: list[dict[str, Any]] = []
+    for g in games:
+        image_id = ((g.get("cover") or {}).get("image_id"))
+        cover_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{image_id}.jpg" if image_id else None
+        frd = g.get("first_release_date")
+        year = None
+        if isinstance(frd, int) and frd > 0:
+            year = time.gmtime(frd).tm_year
+        plats = []
+        for p in (g.get("platforms") or []):
+            n = p.get("name")
+            if n:
+                plats.append(n)
+        out.append({
+            "igdb_id": g.get("id"),
+            "name": g.get("name"),
+            "release_year": year,
+            "cover_url": cover_url,
+            "platforms": plats[:12],
+        })
+    return out
 
 # -----------------------------
 # API
@@ -449,18 +459,15 @@ SELECT
 FROM media
 """
 
-
 @app.post("/scan")
 def scan_barcode(req: ScanRequest) -> dict[str, Any]:
     t0 = time.time()
     input_barcode = req.barcode
     normalized = normalize_barcode(input_barcode)
-
     if not normalized:
         raise HTTPException(status_code=400, detail="Empty/invalid barcode")
 
     db = get_db()
-
     existing = db.execute(MEDIA_SELECT + " WHERE barcode = ?", (normalized,)).fetchone()
     if existing:
         return {
@@ -473,22 +480,17 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
         }
 
     title, media_type, source, source_payload, lookup_debug = lookup_metadata(normalized)
-    title_raw = title
 
     cur = db.cursor()
     cur.execute(
         """
-        INSERT INTO media (
-          barcode, title, title_raw, media_type,
-          source, source_payload
-        )
+        INSERT INTO media (barcode, title, title_raw, media_type, source, source_payload)
         VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (normalized, title, title_raw, media_type, source, source_payload),
+        (normalized, title, title, media_type, source, source_payload),
     )
     db.commit()
     new_id = cur.lastrowid
-
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (new_id,)).fetchone()
 
     return {
@@ -500,34 +502,20 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
         "db": {"inserted": True, "id": new_id},
     }
 
-
 @app.get("/media")
 def list_media(media_type: str | None = None, search: str | None = None) -> list[dict[str, Any]]:
     db = get_db()
     query = MEDIA_SELECT + " WHERE 1=1"
     params: list[Any] = []
-
     if media_type:
         query += " AND COALESCE(media_type,'unknown') = ?"
         params.append(media_type)
-
     if search:
         query += " AND title LIKE ?"
         params.append(f"%{search}%")
-
     query += " ORDER BY COALESCE(updated_at, added_at) DESC, id DESC"
     rows = db.execute(query, params).fetchall()
     return [dict(r) for r in rows]
-
-
-@app.get("/media/{item_id}")
-def get_media(item_id: int) -> dict[str, Any]:
-    db = get_db()
-    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not Found")
-    return dict(row)
-
 
 @app.put("/media/{item_id}")
 def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
@@ -543,42 +531,29 @@ def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
         fields.append(f"{field} = ?")
         params.append(value)
 
-    if patch.title is not None:
-        add("title", patch.title)
-    if patch.title_raw is not None:
-        add("title_raw", patch.title_raw)
-    if patch.media_type is not None:
-        add("media_type", patch.media_type)
+    if patch.title is not None: add("title", patch.title)
+    if patch.title_raw is not None: add("title_raw", patch.title_raw)
+    if patch.media_type is not None: add("media_type", patch.media_type)
 
-    if patch.platform is not None:
-        add("platform", patch.platform)
-    if patch.format is not None:
-        add("format", patch.format)
-    if patch.location is not None:
-        add("location", patch.location)
-    if patch.status is not None:
-        add("status", patch.status)
-    if patch.release_year is not None:
-        add("release_year", patch.release_year)
-    if patch.cover_url is not None:
-        add("cover_url", patch.cover_url)
+    if patch.platform is not None: add("platform", patch.platform)
+    if patch.format is not None: add("format", patch.format)
+    if patch.location is not None: add("location", patch.location)
+    if patch.status is not None: add("status", patch.status)
+    if patch.release_year is not None: add("release_year", patch.release_year)
+    if patch.cover_url is not None: add("cover_url", patch.cover_url)
 
-    if patch.notes is not None:
-        add("notes", patch.notes)
+    if patch.notes is not None: add("notes", patch.notes)
 
     if not fields:
         return {"status": "no_changes", "id": item_id}
 
     fields.append("updated_at = CURRENT_TIMESTAMP")
-    query = f"UPDATE media SET {', '.join(fields)} WHERE id = ?"
     params.append(item_id)
 
-    db.execute(query, params)
+    db.execute(f"UPDATE media SET {', '.join(fields)} WHERE id = ?", params)
     db.commit()
-
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
     return {"status": "updated", "item": dict(row) if row else {"id": item_id}}
-
 
 @app.delete("/media/{item_id}")
 def delete_media(item_id: int) -> dict[str, Any]:
@@ -590,31 +565,33 @@ def delete_media(item_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Not Found")
     return {"status": "deleted", "id": item_id}
 
-
-# ---- Normalization endpoints ----
+# -----------------------------
+# Normalization endpoints
+# -----------------------------
 @app.post("/normalize/{item_id}")
-def normalize_item(item_id: int, req: NormalizeRequest):
+def normalize_item_non_game(item_id: int, req: NormalizeRequest):
+    """
+    For movies/books/unknown: extract ONLY explicit platform/format markers
+    (does not infer platform from arbitrary words in title).
+    """
     db = get_db()
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not Found")
 
     current = dict(row)
+    if (current.get("media_type") or "unknown") == "game":
+        return {"status": "wrong_endpoint", "detail": "Use /normalize_game/{id} for games."}
 
-    # Propose changes
     proposed: dict[str, Any] = {}
+    new_title, plat, fmt = normalize_title_extract_markers_only(current.get("title") or "")
 
-    new_title, plat, fmt = normalize_title_move_platform_format(current.get("title") or "")
-
-    # Only set platform/format if empty currently (safe default)
-    if plat and not current.get("platform"):
-        proposed["platform"] = plat
-    if fmt and not current.get("format"):
-        proposed["format"] = fmt
-
-    # If title changed (and is not empty), propose it
     if new_title and new_title != (current.get("title") or ""):
         proposed["title"] = new_title
+    if plat and not (current.get("platform") or "").strip():
+        proposed["platform"] = plat
+    if fmt and not (current.get("format") or "").strip():
+        proposed["format"] = fmt
 
     if not proposed:
         return {"status": "no_changes", "current": current, "proposed": {}}
@@ -622,9 +599,116 @@ def normalize_item(item_id: int, req: NormalizeRequest):
     if req.dry_run:
         return {"status": "dry_run", "current": current, "proposed": proposed}
 
-    # Apply updates
-    fields = []
-    params = []
+    fields, params = [], []
+    for k, v in proposed.items():
+        fields.append(f"{k} = ?")
+        params.append(v)
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    params.append(item_id)
+    db.execute(f"UPDATE media SET {', '.join(fields)} WHERE id = ?", params)
+    db.commit()
+
+    updated = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    return {"status": "applied", "proposed": proposed, "item": dict(updated) if updated else {"id": item_id}}
+
+@app.post("/normalize_game/{item_id}")
+def normalize_game(item_id: int, req: NormalizeGameRequest):
+    """
+    Games-only normalization via IGDB.
+    - dry_run: return IGDB candidates + proposed changes for best guess (first candidate)
+    - apply: requires igdb_id. Applies canonical title + cover_url + release_year + source metadata.
+    Also extracts explicit platform/format markers from your existing title and moves them out.
+    """
+    db = get_db()
+    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not Found")
+    current = dict(row)
+
+    if (current.get("media_type") or "unknown") != "game":
+        return {"status": "wrong_type", "detail": "This endpoint is for games only."}
+
+    # Step 1: remove explicit markers from title (platform/format) but DO NOT infer
+    stripped_title, marker_platform, marker_format = normalize_title_extract_markers_only(current.get("title") or "")
+    search_title = stripped_title or (current.get("title") or "")
+
+    # Step 2: IGDB candidates based on stripped title
+    candidates = _igdb_candidates_for_title(search_title, limit=8)
+
+    if req.dry_run:
+        proposed: dict[str, Any] = {}
+        if stripped_title and stripped_title != (current.get("title") or ""):
+            proposed["title"] = stripped_title
+        if marker_platform and not (current.get("platform") or "").strip():
+            proposed["platform"] = marker_platform
+        if marker_format and not (current.get("format") or "").strip():
+            proposed["format"] = marker_format
+
+        # Best-guess: first candidate (user will pick in UI)
+        if candidates:
+            best = candidates[0]
+            # We do NOT auto-set platform from IGDB platforms list
+            if best.get("name") and best["name"] != (proposed.get("title") or current.get("title")):
+                proposed["title"] = best["name"]
+            if best.get("release_year") and not current.get("release_year"):
+                proposed["release_year"] = best["release_year"]
+            if best.get("cover_url") and not current.get("cover_url"):
+                proposed["cover_url"] = best["cover_url"]
+
+        return {
+            "status": "dry_run",
+            "current": current,
+            "stripped_title": stripped_title,
+            "candidates": candidates,
+            "proposed_best_guess": proposed,
+        }
+
+    # Apply requires chosen igdb_id
+    if not req.igdb_id:
+        raise HTTPException(status_code=400, detail="igdb_id is required when dry_run=false")
+
+    chosen = next((c for c in candidates if c.get("igdb_id") == req.igdb_id), None)
+    # If candidate list doesn't contain it (rare, if title changed), fetch by id
+    if not chosen:
+        body = f"fields id,name,first_release_date,cover.image_id,platforms.name; where id = {int(req.igdb_id)}; limit 1;"
+        got = _igdb_post("games", body)
+        if not got:
+            raise HTTPException(status_code=404, detail="IGDB game not found")
+        g = got[0]
+        image_id = ((g.get("cover") or {}).get("image_id"))
+        cover_url = f"https://images.igdb.com/igdb/image/upload/t_cover_big/{image_id}.jpg" if image_id else None
+        frd = g.get("first_release_date")
+        year = time.gmtime(frd).tm_year if isinstance(frd, int) and frd > 0 else None
+        plats = [p.get("name") for p in (g.get("platforms") or []) if p.get("name")]
+        chosen = {"igdb_id": g.get("id"), "name": g.get("name"), "release_year": year, "cover_url": cover_url, "platforms": plats}
+
+    proposed: dict[str, Any] = {}
+
+    # Apply marker extraction first (safe)
+    if stripped_title and stripped_title != (current.get("title") or ""):
+        proposed["title"] = stripped_title
+    if marker_platform and not (current.get("platform") or "").strip():
+        proposed["platform"] = marker_platform
+    if marker_format and not (current.get("format") or "").strip():
+        proposed["format"] = marker_format
+
+    # Apply IGDB canonical fields
+    if chosen.get("name"):
+        proposed["title"] = chosen["name"]
+    if chosen.get("release_year"):
+        proposed["release_year"] = chosen["release_year"]
+    if chosen.get("cover_url"):
+        proposed["cover_url"] = chosen["cover_url"]
+
+    # Source metadata
+    proposed["source"] = "igdb"
+    proposed["source_payload"] = json.dumps({
+        "igdb_id": chosen.get("igdb_id"),
+        "platforms": chosen.get("platforms", [])[:20],
+    })
+
+    # Write
+    fields, params = [], []
     for k, v in proposed.items():
         fields.append(f"{k} = ?")
         params.append(v)
@@ -635,65 +719,7 @@ def normalize_item(item_id: int, req: NormalizeRequest):
     db.commit()
 
     updated = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
-    return {"status": "applied", "proposed": proposed, "item": dict(updated) if updated else {"id": item_id}}
-
-
-@app.post("/normalize")
-def normalize_bulk(req: NormalizeRequest, limit: int = 50):
-    """
-    Normalize up to `limit` items that look like they need normalization:
-      - title contains (...) or [...] or " - PS5" patterns
-      - platform/format missing
-    """
-    db = get_db()
-
-    rows = db.execute(
-        MEDIA_SELECT + """
-        WHERE
-          (platform IS NULL OR platform = '' OR format IS NULL OR format = '')
-          AND (
-            title LIKE '%(%)%' OR title LIKE '%[%]%' OR title LIKE '% - %' OR title LIKE '% – %' OR title LIKE '% — %'
-          )
-        ORDER BY id ASC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-
-    results = []
-    for r in rows:
-        item = dict(r)
-        new_title, plat, fmt = normalize_title_move_platform_format(item.get("title") or "")
-        proposed = {}
-        if plat and not item.get("platform"):
-            proposed["platform"] = plat
-        if fmt and not item.get("format"):
-            proposed["format"] = fmt
-        if new_title and new_title != (item.get("title") or ""):
-            proposed["title"] = new_title
-
-        if not proposed:
-            continue
-
-        if req.dry_run:
-            results.append({"id": item["id"], "status": "dry_run", "proposed": proposed})
-            continue
-
-        fields = []
-        params = []
-        for k, v in proposed.items():
-            fields.append(f"{k} = ?")
-            params.append(v)
-        fields.append("updated_at = CURRENT_TIMESTAMP")
-        params.append(item["id"])
-        db.execute(f"UPDATE media SET {', '.join(fields)} WHERE id = ?", params)
-        results.append({"id": item["id"], "status": "applied", "proposed": proposed})
-
-    if not req.dry_run:
-        db.commit()
-
-    return {"count": len(results), "results": results}
-
+    return {"status": "applied", "chosen": chosen, "proposed": proposed, "item": dict(updated) if updated else {"id": item_id}}
 
 # -----------------------------
 # Static UI at /ui

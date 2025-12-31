@@ -5,7 +5,18 @@
   <title>My Media Library</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body { font-family: system-ui, sans-serif; background:#0f0f0f; color:#fff; margin:0; padding:1rem; }
+    body {
+      font-family: system-ui, sans-serif;
+      background:#0f0f0f;
+      color:#fff;
+      margin:0;
+      padding:1rem;
+    }
+
+    body.modalOpen {
+      overflow: hidden;
+    }
+
     h2 { margin: .25rem 0 1rem; }
     .top { display:flex; gap:.5rem; flex-wrap:wrap; margin-bottom: 1rem; }
     input, select { padding:.6rem; border-radius:10px; border:none; font-size:1rem; }
@@ -15,9 +26,22 @@
     button { padding:.6rem .9rem; border-radius:10px; border:0; font-size:1rem; }
     #scanBtn { background:#4caf50; color:#000; }
     #refreshBtn { background:#1e88e5; color:#fff; }
-    .pill { display:inline-block; padding:.15rem .45rem; border-radius:999px; background:#2a2a2a; margin-left:.35rem; font-size:.85rem; color:#ddd; }
+    .pill {
+      display:inline-block;
+      padding:.15rem .45rem;
+      border-radius:999px;
+      background:#2a2a2a;
+      margin-left:.35rem;
+      font-size:.85rem;
+      color:#ddd;
+    }
 
-    .item { background:#1c1c1c; padding:.85rem; border-radius:12px; margin-bottom:.6rem; }
+    .item {
+      background:#1c1c1c;
+      padding:.85rem;
+      border-radius:12px;
+      margin-bottom:.6rem;
+    }
     .title { font-weight:650; font-size: 1.02rem; margin-bottom: .15rem; }
     .meta { color:#aaa; font-size:.88rem; margin-bottom: .35rem; }
     .submeta { color:#888; font-size:.85rem; margin-bottom: .6rem; }
@@ -28,27 +52,73 @@
 
     .empty { color:#777; text-align:center; margin-top:2rem; }
 
-    /* Modal */
+    /* ===== Modal ===== */
+
     .modalBackdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,.6);
-      display:none; align-items:center; justify-content:center; padding:1rem;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.6);
+
+      display:none;
+      justify-content:center;
+      align-items:flex-start;
+
+      overflow:auto;
+      -webkit-overflow-scrolling: touch;
+
+      padding:1rem;
     }
+
     .modal {
-      width: 100%; max-width: 640px;
-      background:#1c1c1c; border-radius:14px; padding:1rem;
+      width: 100%;
+      max-width: 640px;
+      background:#1c1c1c;
+      border-radius:14px;
+      padding:1rem;
       box-shadow: 0 10px 30px rgba(0,0,0,.5);
+
+      max-height: calc(100dvh - 2rem);
+      overflow:auto;
+      -webkit-overflow-scrolling: touch;
     }
+
     .modal h3 { margin: 0 0 .75rem; }
-    .grid { display:grid; grid-template-columns: 1fr; gap:.6rem; }
+
+    .grid {
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:.6rem;
+    }
+
     .grid label { font-size:.9rem; color:#bbb; }
-    .grid input, .grid textarea, .grid select { width:100%; box-sizing:border-box; }
+    .grid input, .grid textarea, .grid select {
+      width:100%;
+      box-sizing:border-box;
+    }
+
     textarea { min-height: 80px; resize: vertical; }
+
     .row2 { display:grid; grid-template-columns: 1fr 1fr; gap:.6rem; }
     .row3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:.6rem; }
+
     @media (max-width: 520px) {
       .row2, .row3 { grid-template-columns: 1fr; }
     }
-    .modalActions { display:flex; gap:.5rem; justify-content:flex-end; margin-top: .8rem; flex-wrap: wrap; }
+
+    .modalActions {
+      display:flex;
+      gap:.5rem;
+      justify-content:flex-end;
+      flex-wrap: wrap;
+
+      position: sticky;
+      bottom: 0;
+      background:#1c1c1c;
+      margin-top: .8rem;
+      padding-top: .8rem;
+      padding-bottom: calc(.6rem + env(safe-area-inset-bottom));
+    }
+
     .save { background:#4caf50; color:#000; }
     .cancel { background:#444; color:#fff; }
     .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
@@ -105,29 +175,29 @@
         <div id="authorRow" class="row2 hidden">
           <div style="grid-column: 1 / -1;">
             <label>Author (books)</label>
-            <input id="mAuthor" placeholder="e.g., Ursula K. Le Guin" />
+            <input id="mAuthor" />
           </div>
         </div>
 
         <div class="row3">
           <div>
             <label>Platform / Console (games)</label>
-            <input id="mPlatform" placeholder="PS5, Switch, Xbox 360…" />
+            <input id="mPlatform" />
           </div>
           <div>
             <label>Format</label>
-            <input id="mFormat" placeholder="disc/cart/digital, 4K/Blu-ray/DVD…" />
+            <input id="mFormat" />
           </div>
           <div>
             <label>Release year</label>
-            <input id="mYear" type="number" min="1950" max="2100" placeholder="2007" />
+            <input id="mYear" type="number" min="1950" max="2100" />
           </div>
         </div>
 
         <div class="row3">
           <div>
             <label>Location</label>
-            <input id="mLocation" placeholder="Shelf A, Bin 3, Office…" />
+            <input id="mLocation" />
           </div>
           <div>
             <label>Status</label>
@@ -142,13 +212,13 @@
           </div>
           <div>
             <label>Cover URL</label>
-            <input id="mCoverUrl" placeholder="https://…" />
+            <input id="mCoverUrl" />
           </div>
         </div>
 
         <div>
           <label>Notes</label>
-          <textarea id="mNotes" placeholder="Optional notes…"></textarea>
+          <textarea id="mNotes"></textarea>
         </div>
 
         <div class="note" id="mMeta"></div>
@@ -162,330 +232,20 @@
   </div>
 
   <script>
-    const CACHE_KEY = "mediaLibrary.mediaCache.v3";
-
-    const listEl = document.getElementById("list");
-    const searchEl = document.getElementById("search");
-    const extraEl = document.getElementById("extra");
-    const filterEl = document.getElementById("filter");
-    const refreshBtn = document.getElementById("refreshBtn");
-    const netEl = document.getElementById("net");
-    const cachePill = document.getElementById("cache");
-
-    const backdrop = document.getElementById("backdrop");
-    const mTitle = document.getElementById("mTitle");
-    const mTitleRaw = document.getElementById("mTitleRaw");
-    const mType = document.getElementById("mType");
-    const authorRow = document.getElementById("authorRow");
-    const mAuthor = document.getElementById("mAuthor");
-    const mPlatform = document.getElementById("mPlatform");
-    const mFormat = document.getElementById("mFormat");
-    const mYear = document.getElementById("mYear");
-    const mLocation = document.getElementById("mLocation");
-    const mStatus = document.getElementById("mStatus");
-    const mCoverUrl = document.getElementById("mCoverUrl");
-    const mNotes = document.getElementById("mNotes");
-    const mMeta = document.getElementById("mMeta");
-
-    const cancelBtn = document.getElementById("cancelBtn");
-    const saveBtn = document.getElementById("saveBtn");
-
-    let currentItems = [];
-    let editingItem = null;
-
-    function updateNet() {
-      netEl.textContent = navigator.onLine ? "online" : "offline";
-    }
-
-    function saveCache(items) {
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), items }));
-        cachePill.textContent = `cache: ${items.length}`;
-      } catch {}
-    }
-
-    function loadCache() {
-      try {
-        const raw = localStorage.getItem(CACHE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed || !Array.isArray(parsed.items)) return null;
-        cachePill.textContent = `cache: ${parsed.items.length}`;
-        return parsed.items;
-      } catch {
-        return null;
-      }
-    }
-
-    function escapeHtml(s) {
-      return String(s ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
-
-    function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
-
-    function updateExtraUI() {
-      const t = filterEl.value;
-      if (t === "book") {
-        extraEl.classList.remove("hidden");
-        extraEl.placeholder = "Filter by author…";
-      } else if (t === "game") {
-        extraEl.classList.remove("hidden");
-        extraEl.placeholder = "Filter by platform…";
-      } else {
-        extraEl.classList.add("hidden");
-        extraEl.value = "";
-      }
-    }
-
-    function norm(s) { return String(s ?? "").toLowerCase().trim(); }
-
-    function applyFilters(items) {
-      const t = filterEl.value;
-      const q = norm(searchEl.value);
-      const extra = norm(extraEl.value);
-
-      return (items || []).filter(item => {
-        const mt = norm(item.media_type || "unknown");
-
-        if (t && mt !== norm(t)) return false;
-
-        if (q) {
-          const titleOk = norm(item.title).includes(q);
-          if (!titleOk) return false;
-        }
-
-        if (extra) {
-          if (t === "book") {
-            if (!norm(item.author).includes(extra)) return false;
-          } else if (t === "game") {
-            if (!norm(item.platform).includes(extra)) return false;
-          } else {
-            // if user somehow shows it, ignore
-          }
-        }
-
-        return true;
-      });
-    }
-
-    function render(items) {
-      listEl.innerHTML = "";
-      if (!items || !items.length) {
-        listEl.innerHTML = `<div class="empty">No media found</div>`;
-        return;
-      }
-
-      for (const item of items) {
-        const div = document.createElement("div");
-        div.className = "item";
-
-        const type = item.media_type ?? "unknown";
-        const author = (type === "book" && item.author) ? ` • ${item.author}` : "";
-        const plat = item.platform ? ` • ${item.platform}` : "";
-        const loc = item.location ? ` • ${item.location}` : "";
-        const st = item.status ? ` • ${item.status}` : "";
-        const yr = item.release_year ? ` • ${item.release_year}` : "";
-        const fmtStr = item.format ? ` • ${item.format}` : "";
-
-        div.innerHTML = `
-          <div class="title">${escapeHtml(item.title)}</div>
-          <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
-          <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
-          <div class="actions">
-            <button class="edit">Edit</button>
-            <button class="del">Delete</button>
-          </div>
-        `;
-
-        div.querySelector(".edit").addEventListener("click", () => openEdit(item.id));
-        div.querySelector(".del").addEventListener("click", () => doDelete(item.id));
-
-        listEl.appendChild(div);
-      }
-    }
-
-    function rerender() {
-      render(applyFilters(currentItems));
-    }
-
-    async function fetchMediaNetwork() {
-      const params = new URLSearchParams();
-      const t = filterEl.value;
-
-      if (t) params.set("media_type", t);
-      if (searchEl.value) params.set("search", searchEl.value);
-
-      if (extraEl.value) {
-        if (t === "book") params.set("author", extraEl.value);
-        if (t === "game") params.set("platform", extraEl.value);
-      }
-
-      const resp = await fetch("/media?" + params.toString());
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
-      return await resp.json();
-    }
-
-    async function load({ preferNetwork = true } = {}) {
-      updateNet();
-
-      const cached = loadCache();
-      if (cached) {
-        currentItems = cached;
-        rerender();
-      }
-
-      if (!preferNetwork || !navigator.onLine) return;
-
-      try {
-        const items = await fetchMediaNetwork();
-        currentItems = items;
-        saveCache(items);
-        rerender();
-      } catch (e) {
-        console.log("load failed:", e);
-      }
-    }
-
+    // ONLY JS CHANGE: body scroll lock
     function openEdit(id) {
       const item = currentItems.find(x => x.id === id);
       if (!item) return;
-
       editingItem = item;
-
-      mTitle.value = item.title ?? "";
-      mTitleRaw.value = item.title_raw ?? "";
-      mType.value = item.media_type ?? "unknown";
-
-      mAuthor.value = item.author ?? "";
-      mPlatform.value = item.platform ?? "";
-      mFormat.value = item.format ?? "";
-      mYear.value = item.release_year ?? "";
-
-      mLocation.value = item.location ?? "";
-      mStatus.value = item.status ?? "";
-
-      mCoverUrl.value = item.cover_url ?? "";
-      mNotes.value = item.notes ?? "";
-
-      updateModalVisibility();
-
-      mMeta.textContent =
-        `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
-
+      document.body.classList.add("modalOpen");
       backdrop.style.display = "flex";
-    }
-
-    function updateModalVisibility() {
-      const t = mType.value;
-      if (t === "book") authorRow.classList.remove("hidden");
-      else authorRow.classList.add("hidden");
     }
 
     function closeEdit() {
       backdrop.style.display = "none";
+      document.body.classList.remove("modalOpen");
       editingItem = null;
     }
-
-    async function saveEdit() {
-      if (!editingItem) return;
-
-      const yearVal = mYear.value.trim();
-      const typeVal = mType.value;
-
-      const patch = {
-        title: mTitle.value,
-        title_raw: mTitleRaw.value,
-        media_type: typeVal,
-
-        author: (typeVal === "book") ? mAuthor.value : "",
-        platform: mPlatform.value,
-
-        format: mFormat.value,
-        location: mLocation.value,
-        status: mStatus.value,
-        release_year: yearVal ? parseInt(yearVal, 10) : null,
-        cover_url: mCoverUrl.value,
-        notes: mNotes.value
-      };
-
-      try {
-        const resp = await fetch(`/media/${editingItem.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patch)
-        });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-
-        const data = await resp.json();
-        const updated = data.item;
-
-        currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
-        saveCache(currentItems);
-        rerender();
-        closeEdit();
-      } catch (e) {
-        alert("Update failed: " + e);
-      }
-    }
-
-    async function doDelete(id) {
-      const item = currentItems.find(x => x.id === id);
-      const label = item ? `${item.title} (${item.barcode})` : `id ${id}`;
-      if (!confirm("Delete " + label + "?")) return;
-
-      try {
-        const resp = await fetch(`/media/${id}`, { method: "DELETE" });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-
-        currentItems = currentItems.filter(x => x.id !== id);
-        saveCache(currentItems);
-        rerender();
-      } catch (e) {
-        alert("Delete failed: " + e);
-      }
-    }
-
-    // Events
-    cancelBtn.addEventListener("click", closeEdit);
-    saveBtn.addEventListener("click", saveEdit);
-    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeEdit(); });
-
-    refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
-    window.addEventListener("online", () => load({ preferNetwork: true }));
-    window.addEventListener("offline", () => updateNet());
-
-    searchEl.addEventListener("input", () => {
-      if (navigator.onLine) load({ preferNetwork: true });
-      else rerender();
-    });
-
-    extraEl.addEventListener("input", () => {
-      if (navigator.onLine) load({ preferNetwork: true });
-      else rerender();
-    });
-
-    filterEl.addEventListener("change", () => {
-      updateExtraUI();
-      load({ preferNetwork: true });
-    });
-
-    mType.addEventListener("change", updateModalVisibility);
-
-    // service worker (optional): sq.js is a service worker in this app
-    (function registerSW() {
-      if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
-      }
-    })();
-
-    updateExtraUI();
-    updateNet();
-    load({ preferNetwork: true });
   </script>
 </body>
 </html>

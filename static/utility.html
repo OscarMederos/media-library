@@ -34,6 +34,12 @@
     @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
     .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:260px; overflow:auto; }
     .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
+
+    /* --- chart sizing fixes (prevents infinite growth / resize feedback loops) --- */
+    .chartTile { margin:0; height:260px; display:flex; flex-direction:column; }
+    .chartTitle { font-size:.85rem; color:var(--muted); margin-bottom:.35rem; }
+    .chartBox { flex:1; min-height:0; }
+    .chartBox canvas { width:100% !important; height:100% !important; display:block; }
   </style>
 </head>
 <body>
@@ -173,44 +179,44 @@
       </div>
 
       <div class="grid2" style="margin-top:.75rem;">
-        <div class="panel" style="margin:0;">
-          <div class="small">Media type</div>
-          <canvas id="chartMediaType" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Media type</div>
+          <div class="chartBox"><canvas id="chartMediaType"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Platform (top 12)</div>
-          <canvas id="chartPlatform" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Platform (top 12)</div>
+          <div class="chartBox"><canvas id="chartPlatform"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Status</div>
-          <canvas id="chartStatus" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Status</div>
+          <div class="chartBox"><canvas id="chartStatus"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Release year (top 20 years)</div>
-          <canvas id="chartYear" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Release year (top 20 years)</div>
+          <div class="chartBox"><canvas id="chartYear"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Missing metadata</div>
-          <canvas id="chartMissing" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Missing metadata</div>
+          <div class="chartBox"><canvas id="chartMissing"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Locations (top 12)</div>
-          <canvas id="chartLocation" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Locations (top 12)</div>
+          <div class="chartBox"><canvas id="chartLocation"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Top authors (books only, top 12)</div>
-          <canvas id="chartTopAuthors" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Top authors (books only, top 12)</div>
+          <div class="chartBox"><canvas id="chartTopAuthors"></canvas></div>
         </div>
 
-        <div class="panel" style="margin:0;">
-          <div class="small">Authors missing (books only)</div>
-          <canvas id="chartAuthorMissingBooks" height="180"></canvas>
+        <div class="panel chartTile">
+          <div class="chartTitle">Authors missing (books only)</div>
+          <div class="chartBox"><canvas id="chartAuthorMissingBooks"></canvas></div>
         </div>
       </div>
 
@@ -358,10 +364,12 @@
     selected = new Set(loaded.map(r => Number(r.id)));
     renderTable();
   }
+
   function selectNone() {
     selected = new Set();
     renderTable();
   }
+
   function invertSelection() {
     const next = new Set();
     for (const r of loaded) {
@@ -506,6 +514,18 @@
     charts.authorMissingBooks = destroyChart(charts.authorMissingBooks);
   }
 
+  function recreateCanvas(canvasId) {
+    const oldCanvas = document.getElementById(canvasId);
+    if (!oldCanvas) return null;
+
+    const parent = oldCanvas.parentElement;
+    const newCanvas = document.createElement("canvas");
+    newCanvas.id = canvasId;
+
+    parent.replaceChild(newCanvas, oldCanvas);
+    return newCanvas;
+  }
+
   function countByKey(rows, keyFn) {
     const m = new Map();
     for (const r of rows) {
@@ -545,16 +565,14 @@
   }
 
   function buildBarChart(canvasId, labels, values, title) {
-    const ctx = document.getElementById(canvasId);
-    return new Chart(ctx, {
+    const canvas = recreateCanvas(canvasId);
+    return new Chart(canvas, {
       type: "bar",
-      data: {
-        labels,
-        datasets: [{ label: title, data: values }]
-      },
+      data: { labels, datasets: [{ label: title, data: values }] },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         plugins: {
           legend: { display: false },
           tooltip: { enabled: true },
@@ -565,18 +583,16 @@
   }
 
   function buildDoughnutChart(canvasId, labels, values, title) {
-    const ctx = document.getElementById(canvasId);
-    return new Chart(ctx, {
+    const canvas = recreateCanvas(canvasId);
+    return new Chart(canvas, {
       type: "doughnut",
-      data: {
-        labels,
-        datasets: [{ label: title, data: values }]
-      },
+      data: { labels, datasets: [{ label: title, data: values }] },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         plugins: {
-          legend: { position: "bottom", labels: { color: "#bdbdbd" } },
+          legend: { display: false },
           tooltip: { enabled: true },
         }
       }
@@ -586,12 +602,14 @@
   function generateCharts() {
     if (!ensureLoadedForReport()) return;
 
+    // Ensure we destroy prior instances (good hygiene) and then recreate canvases in builders
+    destroyAllCharts();
+
     const rows = loaded;
 
     // Media type (doughnut)
     const mtMap = countByKey(rows, r => (r.media_type && String(r.media_type).trim()) ? String(r.media_type) : "null");
     const mtEntries = topNEntries(mtMap, 20);
-    charts.mediaType = destroyChart(charts.mediaType);
     charts.mediaType = buildDoughnutChart(
       "chartMediaType",
       mtEntries.map(([k]) => k),
@@ -602,7 +620,6 @@
     // Platform (top 12 bar)
     const platMap = countByKey(rows, r => (r.platform && String(r.platform).trim()) ? String(r.platform) : "null");
     const platEntries = topNEntries(platMap, 12);
-    charts.platform = destroyChart(charts.platform);
     charts.platform = buildBarChart(
       "chartPlatform",
       platEntries.map(([k]) => k),
@@ -613,7 +630,6 @@
     // Status (doughnut)
     const statusMap = countByKey(rows, r => (r.status && String(r.status).trim()) ? String(r.status) : "null");
     const statusEntries = topNEntries(statusMap, 20);
-    charts.status = destroyChart(charts.status);
     charts.status = buildDoughnutChart(
       "chartStatus",
       statusEntries.map(([k]) => k),
@@ -627,7 +643,7 @@
       if (y === null || y === undefined || y === "") return "null";
       return String(y);
     });
-    const yearTop = topNEntries(yearMap, 60); // take more then sort for nicer chronology
+    const yearTop = topNEntries(yearMap, 60);
     const yearEntries = yearTop.sort((a,b) => {
       const ak = a[0], bk = b[0];
       if (ak === "null") return 1;
@@ -637,7 +653,6 @@
       return ak.localeCompare(bk);
     }).slice(0, 20);
 
-    charts.year = destroyChart(charts.year);
     charts.year = buildBarChart(
       "chartYear",
       yearEntries.map(([k]) => k),
@@ -659,7 +674,6 @@
       source: rows.filter(r => isEmpty(r.source)).length,
     };
 
-    charts.missing = destroyChart(charts.missing);
     charts.missing = buildBarChart(
       "chartMissing",
       Object.keys(missing),
@@ -670,7 +684,6 @@
     // Location (top 12 bar)
     const locMap = countByKey(rows, r => (r.location && String(r.location).trim()) ? String(r.location) : "null");
     const locEntries = topNEntries(locMap, 12);
-    charts.location = destroyChart(charts.location);
     charts.location = buildBarChart(
       "chartLocation",
       locEntries.map(([k]) => k),
@@ -682,7 +695,6 @@
     const bookRows = rows.filter(r => String(r.media_type || "").trim() === "book");
     const authorMap = countByKey(bookRows, r => (r.author && String(r.author).trim()) ? String(r.author) : "null");
     const authorEntries = topNEntries(authorMap, 12);
-    charts.topAuthors = destroyChart(charts.topAuthors);
     charts.topAuthors = buildBarChart(
       "chartTopAuthors",
       authorEntries.map(([k]) => k),
@@ -690,10 +702,9 @@
       "Top authors (books)"
     );
 
-    // Authors missing (books only) (simple 2-slice doughnut)
+    // Authors missing (books only) (2-slice doughnut)
     const missingAuthors = bookRows.filter(r => isEmpty(r.author)).length;
     const presentAuthors = Math.max(0, bookRows.length - missingAuthors);
-    charts.authorMissingBooks = destroyChart(charts.authorMissingBooks);
     charts.authorMissingBooks = buildDoughnutChart(
       "chartAuthorMissingBooks",
       ["present", "missing"],

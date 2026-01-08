@@ -166,40 +166,6 @@
       </div>
     </div>
 
-    <div class="panel">
-      <h3>Enrichment</h3>
-      <div class="hint">
-        Your current backend only exposes <span class="pill">POST /scan</span>, which does not update existing rows.
-        The enrichment action below performs a <b>replace</b>: delete row → rescan barcode → re-apply preserved metadata.
-      </div>
-
-      <div class="row" style="margin-top:.75rem;">
-        <div>
-          <label>Preserve on replace</label>
-          <div class="small">
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pNotes" checked /> notes</label>
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pPlatform" checked /> platform</label>
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pFormat" checked /> format</label>
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pLocation" checked /> location</label>
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pStatus" checked /> status</label>
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pYear" checked /> release_year</label>
-            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pAuthor" checked /> author</label>
-          </div>
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:.75rem;">
-        <button id="btnReplaceRescan" class="danger">Replace + Rescan (selected)</button>
-        <div class="spacer"></div>
-        <button id="btnRefreshLoaded">Refresh loaded rows</button>
-      </div>
-
-      <div class="hint warn" style="margin-top:.5rem;">
-        Replace changes IDs (new rows) and will briefly remove items if a rescan fails.
-      </div>
-    </div>
-  </div>
-
   <div class="panel">
     <h3>Reporting (loaded rows)</h3>
     <div class="row">
@@ -233,7 +199,7 @@
   function setBusy(isBusy) {
     for (const id of [
       "btnLoad","btnClear","btnSelectAll","btnSelectNone","btnInvertSel","btnExportCsv",
-      "btnBulkUpdate","btnReplaceRescan","btnRefreshLoaded","btnReport","btnCopyReport"
+      "btnBulkUpdate","btnReport","btnCopyReport"
     ]) {
       const b = $(id);
       if (b) b.disabled = isBusy;
@@ -466,91 +432,6 @@
     log(`Exported CSV (${loaded.length} rows).`, "ok");
   }
 
-  function getPreserveFlags() {
-    return {
-      notes: $("pNotes").checked,
-      platform: $("pPlatform").checked,
-      format: $("pFormat").checked,
-      location: $("pLocation").checked,
-      status: $("pStatus").checked,
-      release_year: $("pYear").checked,
-      author: $("pAuthor").checked
-    };
-  }
-
-  function pickPreservedPayload(row, flags) {
-    const p = {};
-    if (flags.notes && row.notes) p.notes = row.notes;
-    if (flags.platform && row.platform) p.platform = row.platform;
-    if (flags.format && row.format) p.format = row.format;
-    if (flags.location && row.location) p.location = row.location;
-    if (flags.status && row.status) p.status = row.status;
-    if (flags.release_year && row.release_year !== null && row.release_year !== undefined) p.release_year = row.release_year;
-    if (flags.author && row.author) p.author = row.author;
-    return p;
-  }
-
-  async function replaceAndRescanSelected() {
-    if (selected.size === 0) {
-      log("No selected rows.", "warn");
-      return;
-    }
-
-    const flags = getPreserveFlags();
-    const rowsById = new Map(loaded.map(r => [Number(r.id), r]));
-    const ids = [...selected];
-
-    setBusy(true);
-    try {
-      log(`Replace+rescan for ${ids.length} items...`, "warn");
-
-      let ok = 0, fail = 0;
-      for (const id of ids) {
-        const row = rowsById.get(id);
-        if (!row) continue;
-
-        const barcode = String(row.barcode || "").trim();
-        if (!barcode) {
-          fail++;
-          log(`Skip id=${id}: missing barcode`, "err");
-          continue;
-        }
-
-        const preserved = pickPreservedPayload(row, flags);
-
-        try {
-          // 1) delete existing
-          await apiJson(`/media/${id}`, { method:"DELETE" });
-
-          // 2) rescan -> creates new row
-          const scanRes = await apiJson(`/scan`, { method:"POST", body: JSON.stringify({ barcode }) });
-
-          if (scanRes.status !== "added" || !scanRes.item?.id) {
-            throw new Error(`Unexpected scan result: ${scanRes.status}`);
-          }
-
-          // 3) re-apply preserved metadata to new id
-          const newId = Number(scanRes.item.id);
-          if (Object.keys(preserved).length > 0) {
-            await apiJson(`/media/${newId}`, { method:"PUT", body: JSON.stringify(preserved) });
-          }
-
-          ok++;
-          log(`id=${id} replaced -> newId=${newId}`, "ok");
-        } catch (e) {
-          fail++;
-          log(`Replace failed for id=${id}: ${String(e)}`, "err");
-        }
-      }
-
-      log(`Replace+rescan done. ok=${ok} fail=${fail}`, fail ? "warn" : "ok");
-      await loadMedia();
-      selectNone();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   function report() {
     const rows = loaded;
 
@@ -636,8 +517,6 @@
   $("btnInvertSel").addEventListener("click", invertSelection);
   $("btnExportCsv").addEventListener("click", exportCsv);
   $("btnBulkUpdate").addEventListener("click", bulkUpdate);
-  $("btnReplaceRescan").addEventListener("click", replaceAndRescanSelected);
-  $("btnRefreshLoaded").addEventListener("click", loadMedia);
   $("btnReport").addEventListener("click", report);
   $("btnCopyReport").addEventListener("click", copyReport);
 

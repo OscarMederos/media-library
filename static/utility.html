@@ -25,14 +25,11 @@
     @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
     .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:240px; overflow:auto; margin-top:.75rem; }
 
-    /* chart sizing fixes */
-    .chartTile { margin:0; height:320px; display:flex; flex-direction:column; }
-    .chartHeader { display:flex; align-items:baseline; gap:.5rem; }
-    .chartTitle { font-size:.9rem; color:var(--muted); }
-    .chartKpi { font-size:.95rem; color:var(--text); }
-    .chartBox { flex:1; min-height:0; margin-top:.35rem; }
-    .chartBox canvas { width:100% !important; height:100% !important; display:block; }
 
+    .chartTile { margin:0; display:block; }
+    .chartBox { height:240px; margin-top:.35rem; }
+    .chartBox canvas { width:100% !important; height:100% !important; display:block; }
+    .tableWrap { max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:12px; margin-top:.6rem; }
     .legend { margin-top:.4rem; display:flex; gap:.5rem; flex-wrap:wrap; }
     .legendItem { display:flex; gap:.35rem; align-items:center; font-size:.85rem; color:var(--muted); }
     .dot { width:.6rem; height:.6rem; border-radius:999px; background:#888; display:inline-block; }

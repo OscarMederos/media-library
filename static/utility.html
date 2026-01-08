@@ -8,12 +8,14 @@
     :root { --bg:#0f0f0f; --panel:#171717; --panel2:#1f1f1f; --text:#fff; --muted:#bdbdbd; --line:#2a2a2a; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0; padding:1rem; }
     h2 { margin:.25rem 0 1rem; }
+    h3 { margin: 1rem 0 .5rem; }
     .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:1rem; }
     .row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; }
     .spacer { flex:1; }
     button { background:#2b2b2b; border:1px solid var(--line); color:var(--text); padding:.65rem .9rem; border-radius:12px; cursor:pointer; }
     button:hover { background:#353535; }
     button:disabled { opacity:.55; cursor:not-allowed; }
+    select { background:var(--panel2); border:1px solid var(--line); border-radius:12px; color:var(--text); padding:.55rem .7rem; font-size:1rem; }
     .ok { color:#a8ffb3; }
     .warn { color:#ffd37a; }
     .err { color:#ff9a9a; }
@@ -24,10 +26,25 @@
     .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:240px; overflow:auto; margin-top:.75rem; }
 
     /* chart sizing fixes */
-    .chartTile { margin:0; height:260px; display:flex; flex-direction:column; }
-    .chartTitle { font-size:.85rem; color:var(--muted); margin-bottom:.35rem; }
-    .chartBox { flex:1; min-height:0; }
+    .chartTile { margin:0; height:320px; display:flex; flex-direction:column; }
+    .chartHeader { display:flex; align-items:baseline; gap:.5rem; }
+    .chartTitle { font-size:.9rem; color:var(--muted); }
+    .chartKpi { font-size:.95rem; color:var(--text); }
+    .chartBox { flex:1; min-height:0; margin-top:.35rem; }
     .chartBox canvas { width:100% !important; height:100% !important; display:block; }
+
+    .legend { margin-top:.4rem; display:flex; gap:.5rem; flex-wrap:wrap; }
+    .legendItem { display:flex; gap:.35rem; align-items:center; font-size:.85rem; color:var(--muted); }
+    .dot { width:.6rem; height:.6rem; border-radius:999px; background:#888; display:inline-block; }
+
+    table { width:100%; border-collapse:collapse; margin-top:.6rem; overflow:hidden; border-radius:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:.45rem .5rem; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; font-size:.85rem; background:#141414; position:sticky; top:0; z-index:1; }
+    tr:hover td { background:#141414; }
+    .tableWrap { max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:12px; margin-top:.6rem; }
+    .small { font-size:.85rem; color:var(--muted); }
+    .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   </style>
 </head>
 <body>
@@ -38,32 +55,107 @@
       <button id="btnLoad">Load data</button>
       <button id="btnReport">Generate charts</button>
       <button id="btnExportPng">Export charts (PNG)</button>
+
       <div class="spacer"></div>
+
+      <label class="muted" for="scopeSel">Scope</label>
+      <select id="scopeSel">
+        <option value="all" selected>All loaded</option>
+        <option value="filtered">Respect current filters (future)</option>
+        <option value="last30">Last 30 days (added/updated)</option>
+      </select>
+
       <div class="muted">
         Loaded rows: <span id="loadedCount" class="pill">0</span>
+        Scoped rows: <span id="scopedCount" class="pill">0</span>
       </div>
     </div>
 
     <div class="grid2">
       <div class="panel chartTile">
-        <div class="chartTitle">Media type</div>
+        <div class="chartHeader">
+          <div class="chartTitle">Media type</div>
+          <div id="kpiMediaType" class="chartKpi"></div>
+        </div>
         <div class="chartBox"><canvas id="chartMediaType"></canvas></div>
+        <div id="legendMediaType" class="legend"></div>
       </div>
 
       <div class="panel chartTile">
-        <div class="chartTitle">Books missing author</div>
+        <div class="chartHeader">
+          <div class="chartTitle">Books missing author</div>
+          <div id="kpiBooksMissingAuthor" class="chartKpi"></div>
+        </div>
         <div class="chartBox"><canvas id="chartBooksMissingAuthor"></canvas></div>
+        <div id="legendBooksMissingAuthor" class="legend"></div>
+
+        <div class="row" style="margin-top:.5rem;">
+          <div class="small">First <span id="booksN" class="pill">25</span> missing</div>
+          <div class="spacer"></div>
+          <button id="btnCopyBooksCsv">Copy CSV</button>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>ID</th><th>Barcode</th><th>Title</th></tr></thead>
+            <tbody id="tblBooksMissingAuthor"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="panel chartTile">
-        <div class="chartTitle">Games missing platform</div>
+        <div class="chartHeader">
+          <div class="chartTitle">Games missing platform</div>
+          <div id="kpiGamesMissingPlatform" class="chartKpi"></div>
+        </div>
         <div class="chartBox"><canvas id="chartGamesMissingPlatform"></canvas></div>
+        <div id="legendGamesMissingPlatform" class="legend"></div>
+
+        <div class="row" style="margin-top:.5rem;">
+          <div class="small">First <span id="gamesN" class="pill">25</span> missing</div>
+          <div class="spacer"></div>
+          <button id="btnCopyGamesCsv">Copy CSV</button>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>ID</th><th>Barcode</th><th>Title</th></tr></thead>
+            <tbody id="tblGamesMissingPlatform"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="panel chartTile">
-        <div class="chartTitle">Movies missing format</div>
+        <div class="chartHeader">
+          <div class="chartTitle">Movies missing format</div>
+          <div id="kpiMoviesMissingFormat" class="chartKpi"></div>
+        </div>
         <div class="chartBox"><canvas id="chartMoviesMissingFormat"></canvas></div>
+        <div id="legendMoviesMissingFormat" class="legend"></div>
+
+        <div class="row" style="margin-top:.5rem;">
+          <div class="small">First <span id="moviesN" class="pill">25</span> missing</div>
+          <div class="spacer"></div>
+          <button id="btnCopyMoviesCsv">Copy CSV</button>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>ID</th><th>Barcode</th><th>Title</th></tr></thead>
+            <tbody id="tblMoviesMissingFormat"></tbody>
+          </table>
+        </div>
       </div>
+    </div>
+
+    <div class="panel" style="margin-top:.75rem;">
+      <h3>Data quality (scoped)</h3>
+      <div class="row">
+        <div>Duplicate barcodes: <span id="dqDupBarcodes" class="pill">0</span></div>
+        <div>Empty titles: <span id="dqEmptyTitles" class="pill">0</span></div>
+        <div>Unknown media_type: <span id="dqUnknownType" class="pill">0</span></div>
+        <div>Missing cover_url: <span id="dqMissingCover" class="pill">0</span></div>
+        <div class="spacer"></div>
+        <button id="btnCopyDupesCsv">Copy dupes CSV</button>
+      </div>
+      <div class="hint">Duplicate CSV includes: barcode, count, example_ids</div>
     </div>
 
     <div id="logOut" class="log"></div>
@@ -73,7 +165,17 @@
   <script>
     const $ = (id) => document.getElementById(id);
 
+    const OFFENDER_LIMIT = 25;
+
     let loaded = [];
+    let scoped = [];
+    let lastOffenders = {
+      booksMissingAuthor: [],
+      gamesMissingPlatform: [],
+      moviesMissingFormat: [],
+      dupes: [],
+    };
+
     let charts = {
       mediaType: null,
       booksMissingAuthor: null,
@@ -91,9 +193,10 @@
     }
 
     function setBusy(isBusy) {
-      for (const id of ["btnLoad","btnReport","btnExportPng"]) {
+      for (const id of ["btnLoad","btnReport","btnExportPng","btnCopyBooksCsv","btnCopyGamesCsv","btnCopyMoviesCsv","btnCopyDupesCsv"]) {
         $(id).disabled = isBusy;
       }
+      $("scopeSel").disabled = isBusy;
     }
 
     async function apiJson(url, opts={}) {
@@ -132,6 +235,32 @@
       return v === "game" || v === "video_game" || v === "games";
     }
 
+    function parseMaybeDate(s) {
+      if (!s) return null;
+      const d = new Date(s);
+      return Number.isFinite(d.getTime()) ? d : null;
+    }
+
+    function getScopedRows() {
+      // "filtered" is a placeholder for when you add UI filters again; currently same as "all".
+      const mode = $("scopeSel").value;
+
+      if (!Array.isArray(loaded)) return [];
+
+      if (mode === "last30") {
+        const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        return loaded.filter(r => {
+          const a = parseMaybeDate(r.added_at);
+          const u = parseMaybeDate(r.updated_at);
+          const best = (u && u.getTime()) ? u.getTime() : (a && a.getTime()) ? a.getTime() : null;
+          return best !== null && best >= cutoff;
+        });
+      }
+
+      // all / filtered (currently same)
+      return loaded.slice();
+    }
+
     function destroyChart(c) {
       if (c) c.destroy();
       return null;
@@ -168,6 +297,71 @@
       });
     }
 
+    function pct(part, total) {
+      if (!total) return "0%";
+      return `${Math.round((part / total) * 100)}%`;
+    }
+
+    function setLegend(elId, items) {
+      const el = $(elId);
+      el.innerHTML = "";
+      for (const it of items) {
+        const div = document.createElement("div");
+        div.className = "legendItem";
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        // no explicit colors; keep neutral dots
+        div.appendChild(dot);
+
+        const txt = document.createElement("span");
+        txt.textContent = it;
+        div.appendChild(txt);
+
+        el.appendChild(div);
+      }
+    }
+
+    function setKpi(elId, text) {
+      $(elId).textContent = text;
+    }
+
+    function renderOffenders(tbodyId, rows) {
+      const tb = $(tbodyId);
+      tb.innerHTML = "";
+      for (const r of rows) {
+        const tr = document.createElement("tr");
+        const tdId = document.createElement("td"); tdId.textContent = String(r.id ?? "");
+        const tdBc = document.createElement("td"); tdBc.textContent = String(r.barcode ?? "");
+        const tdT = document.createElement("td"); tdT.textContent = String(r.title ?? "");
+        tr.appendChild(tdId); tr.appendChild(tdBc); tr.appendChild(tdT);
+        tb.appendChild(tr);
+      }
+      if (rows.length === 0) {
+        const tr = document.createElement("tr");
+        const td = document.createElement("td");
+        td.colSpan = 3;
+        td.className = "muted";
+        td.textContent = "None";
+        tr.appendChild(td);
+        tb.appendChild(tr);
+      }
+    }
+
+    function toCsv(rows, cols) {
+      const esc = (v) => {
+        const s = v === null || v === undefined ? "" : String(v);
+        if (/[",\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
+        return s;
+      };
+      const header = cols.join(",");
+      const body = rows.map(r => cols.map(c => esc(r[c])).join(",")).join("\n");
+      return header + "\n" + body + (body ? "\n" : "");
+    }
+
+    async function copyText(text) {
+      await navigator.clipboard.writeText(text);
+    }
+
     function countMediaTypes(rows) {
       const m = new Map();
       for (const r of rows) {
@@ -178,6 +372,34 @@
       return [...m.entries()].sort((a,b) => b[1] - a[1]);
     }
 
+    function computeDataQuality(rows) {
+      // duplicate barcodes
+      const byBarcode = new Map();
+      for (const r of rows) {
+        const bc = String(r.barcode || "").trim();
+        if (!bc) continue;
+        const arr = byBarcode.get(bc) || [];
+        arr.push(Number(r.id));
+        byBarcode.set(bc, arr);
+      }
+      const dupes = [];
+      for (const [bc, ids] of byBarcode.entries()) {
+        if (ids.length > 1) {
+          dupes.push({ barcode: bc, count: ids.length, example_ids: ids.slice(0, 8).join("|") });
+        }
+      }
+      dupes.sort((a,b) => b.count - a.count);
+
+      const emptyTitles = rows.filter(r => isEmpty(r.title)).length;
+      const unknownType = rows.filter(r => {
+        const mt = String(r.media_type || "").trim().toLowerCase();
+        return !mt || mt === "unknown";
+      }).length;
+      const missingCover = rows.filter(r => isEmpty(r.cover_url)).length;
+
+      return { dupes, emptyTitles, unknownType, missingCover };
+    }
+
     async function loadData() {
       setBusy(true);
       try {
@@ -185,13 +407,28 @@
         loaded = await apiJson("/media", { method: "GET" });
         $("loadedCount").textContent = String(Array.isArray(loaded) ? loaded.length : 0);
         log(`Loaded ${loaded.length} rows.`, "ok");
+        applyScopeAndRefresh();
       } catch (e) {
         log(String(e), "err");
         loaded = [];
+        scoped = [];
         $("loadedCount").textContent = "0";
+        $("scopedCount").textContent = "0";
       } finally {
         setBusy(false);
       }
+    }
+
+    function applyScopeAndRefresh() {
+      scoped = getScopedRows();
+      $("scopedCount").textContent = String(scoped.length);
+      // keep UI in sync even before charts
+      const dq = computeDataQuality(scoped);
+      $("dqDupBarcodes").textContent = String(dq.dupes.length);
+      $("dqEmptyTitles").textContent = String(dq.emptyTitles);
+      $("dqUnknownType").textContent = String(dq.unknownType);
+      $("dqMissingCover").textContent = String(dq.missingCover);
+      lastOffenders.dupes = dq.dupes;
     }
 
     function generateCharts() {
@@ -204,19 +441,22 @@
         return;
       }
 
+      applyScopeAndRefresh();
       destroyAllCharts();
 
       // 1) media type
-      const mtEntries = countMediaTypes(loaded);
+      const mtEntries = countMediaTypes(scoped);
       charts.mediaType = buildDoughnut(
         "chartMediaType",
         mtEntries.map(([k]) => k),
         mtEntries.map(([,v]) => v),
         "Media type"
       );
+      setKpi("kpiMediaType", `(${scoped.length})`);
+      setLegend("legendMediaType", mtEntries.slice(0, 8).map(([k,v]) => `${k}: ${v} (${pct(v, scoped.length)})`));
 
       // 2) books missing author
-      const bookRows = loaded.filter(isBook);
+      const bookRows = scoped.filter(isBook);
       const booksMissingAuthor = bookRows.filter(r => isEmpty(r.author)).length;
       const booksHasAuthor = Math.max(0, bookRows.length - booksMissingAuthor);
       charts.booksMissingAuthor = buildDoughnut(
@@ -225,9 +465,16 @@
         [booksHasAuthor, booksMissingAuthor],
         "Books missing author"
       );
+      setKpi("kpiBooksMissingAuthor", `(${booksMissingAuthor}/${bookRows.length})`);
+      setLegend("legendBooksMissingAuthor", [
+        `has author: ${booksHasAuthor} (${pct(booksHasAuthor, bookRows.length)})`,
+        `missing author: ${booksMissingAuthor} (${pct(booksMissingAuthor, bookRows.length)})`,
+      ]);
+      lastOffenders.booksMissingAuthor = bookRows.filter(r => isEmpty(r.author)).slice(0, OFFENDER_LIMIT);
+      renderOffenders("tblBooksMissingAuthor", lastOffenders.booksMissingAuthor);
 
       // 3) games missing platform
-      const gameRows = loaded.filter(isGame);
+      const gameRows = scoped.filter(isGame);
       const gamesMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).length;
       const gamesHasPlatform = Math.max(0, gameRows.length - gamesMissingPlatform);
       charts.gamesMissingPlatform = buildDoughnut(
@@ -236,9 +483,16 @@
         [gamesHasPlatform, gamesMissingPlatform],
         "Games missing platform"
       );
+      setKpi("kpiGamesMissingPlatform", `(${gamesMissingPlatform}/${gameRows.length})`);
+      setLegend("legendGamesMissingPlatform", [
+        `has platform: ${gamesHasPlatform} (${pct(gamesHasPlatform, gameRows.length)})`,
+        `missing platform: ${gamesMissingPlatform} (${pct(gamesMissingPlatform, gameRows.length)})`,
+      ]);
+      lastOffenders.gamesMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).slice(0, OFFENDER_LIMIT);
+      renderOffenders("tblGamesMissingPlatform", lastOffenders.gamesMissingPlatform);
 
       // 4) movies missing format
-      const movieRows = loaded.filter(isMovie);
+      const movieRows = scoped.filter(isMovie);
       const moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).length;
       const moviesHasFormat = Math.max(0, movieRows.length - moviesMissingFormat);
       charts.moviesMissingFormat = buildDoughnut(
@@ -247,8 +501,15 @@
         [moviesHasFormat, moviesMissingFormat],
         "Movies missing format"
       );
+      setKpi("kpiMoviesMissingFormat", `(${moviesMissingFormat}/${movieRows.length})`);
+      setLegend("legendMoviesMissingFormat", [
+        `has format: ${moviesHasFormat} (${pct(moviesHasFormat, movieRows.length)})`,
+        `missing format: ${moviesMissingFormat} (${pct(moviesMissingFormat, movieRows.length)})`,
+      ]);
+      lastOffenders.moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).slice(0, OFFENDER_LIMIT);
+      renderOffenders("tblMoviesMissingFormat", lastOffenders.moviesMissingFormat);
 
-      log("Generated charts.", "ok");
+      log("Generated charts + actionable tables.", "ok");
     }
 
     function exportChartsPng() {
@@ -280,9 +541,36 @@
       log("Exported chart PNGs.", "ok");
     }
 
+    async function copyOffendersCsv(which) {
+      const rows = lastOffenders[which] || [];
+      const csv = toCsv(rows, ["id","barcode","title"]);
+      await copyText(csv);
+      log(`Copied CSV: ${which} (${rows.length} rows).`, "ok");
+    }
+
+    async function copyDupesCsv() {
+      const rows = lastOffenders.dupes || [];
+      const csv = toCsv(rows, ["barcode","count","example_ids"]);
+      await copyText(csv);
+      log(`Copied dupes CSV (${rows.length} rows).`, "ok");
+    }
+
     $("btnLoad").addEventListener("click", loadData);
     $("btnReport").addEventListener("click", generateCharts);
     $("btnExportPng").addEventListener("click", exportChartsPng);
+
+    $("scopeSel").addEventListener("change", () => {
+      applyScopeAndRefresh();
+      // If charts already exist, refresh them so scope changes are visible.
+      if (charts.mediaType || charts.booksMissingAuthor || charts.gamesMissingPlatform || charts.moviesMissingFormat) {
+        generateCharts();
+      }
+    });
+
+    $("btnCopyBooksCsv").addEventListener("click", () => copyOffendersCsv("booksMissingAuthor"));
+    $("btnCopyGamesCsv").addEventListener("click", () => copyOffendersCsv("gamesMissingPlatform"));
+    $("btnCopyMoviesCsv").addEventListener("click", () => copyOffendersCsv("moviesMissingFormat"));
+    $("btnCopyDupesCsv").addEventListener("click", copyDupesCsv);
 
     // Auto-load once
     loadData();

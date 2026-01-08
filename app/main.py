@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -480,6 +480,86 @@ def delete_media(item_id: int) -> dict[str, Any]:
     return {"status": "deleted", "id": item_id}
 
 
+
+# -----------------------------
+# Reporting endpoints
+# -----------------------------
+def _media_type_sql_values(media_type: str) -> tuple[str, list[str]]:
+    mt = (media_type or '').strip().lower()
+    if mt in ('game', 'games', 'video_game'):
+        return "(COALESCE(media_type,'unknown') IN (?, ?))", ['game', 'video_game']
+    return "(COALESCE(media_type,'unknown') = ?)", [mt]
+
+
+@app.get('/reports/summary')
+def report_summary() -> dict[str, Any]:
+    db = get_db()
+    # media type counts
+    mt_rows = db.execute(
+        "SELECT COALESCE(media_type,'unknown') AS k, COUNT(*) AS n "
+        "FROM media "
+        "GROUP BY COALESCE(media_type,'unknown') "
+        "ORDER BY n DESC"
+    ).fetchall()
+    media_type_counts = [{'media_type': r['k'], 'count': r['n']} for r in mt_rows]
+
+    dup_rows = db.execute(
+        "SELECT barcode, COUNT(*) AS n "
+        "FROM media "
+        "WHERE barcode IS NOT NULL AND TRIM(barcode) <> '' "
+        "GROUP BY barcode "
+        "HAVING COUNT(*) > 1"
+    ).fetchall()
+    duplicate_barcodes = len(dup_rows)
+
+    empty_titles = db.execute(
+        "SELECT COUNT(*) AS n FROM media WHERE title IS NULL OR TRIM(title) = ''"
+    ).fetchone()['n']
+
+    unknown_media_type = db.execute(
+        "SELECT COUNT(*) AS n "
+        "FROM media "
+        "WHERE media_type IS NULL OR TRIM(media_type) = '' OR LOWER(TRIM(media_type)) = 'unknown'"
+    ).fetchone()['n']
+
+    missing_cover_url = db.execute(
+        "SELECT COUNT(*) AS n FROM media WHERE cover_url IS NULL OR TRIM(cover_url) = ''"
+    ).fetchone()['n']
+
+    return {
+        'media_type_counts': media_type_counts,
+        'data_quality': {
+            'duplicate_barcodes': duplicate_barcodes,
+            'empty_titles': empty_titles,
+            'unknown_media_type': unknown_media_type,
+            'missing_cover_url': missing_cover_url,
+        },
+    }
+
+
+@app.get('/reports/missing')
+def report_missing(
+    media_type: str = Query(..., description='book | movie | game | video_game'),
+    field: str = Query(..., description='author | platform | format | cover_url'),
+    limit: int = Query(25, ge=1, le=500),
+) -> list[dict[str, Any]]:
+    allowed_fields = {'author', 'platform', 'format', 'cover_url'}
+    if field not in allowed_fields:
+        raise HTTPException(status_code=400, detail=f"field must be one of: {sorted(allowed_fields)}")
+
+    where_mt, mt_params = _media_type_sql_values(media_type)
+
+    db = get_db()
+
+    sql = (
+        MEDIA_SELECT
+        + f" WHERE {where_mt} AND ({field} IS NULL OR TRIM({field}) = '')"
+        + " ORDER BY updated_at DESC, added_at DESC, id DESC"
+        + " LIMIT ?"
+    )
+    params: list[Any] = [*mt_params, limit]
+    rows = db.execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
 # -----------------------------
 # Static UI at /ui
 # -----------------------------

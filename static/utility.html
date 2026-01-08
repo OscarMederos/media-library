@@ -19,8 +19,6 @@
     button { background:#2b2b2b; border:1px solid var(--line); color:var(--text); padding:.65rem .9rem; border-radius:12px; cursor:pointer; }
     button:hover { background:#353535; }
     button:disabled { opacity:.55; cursor:not-allowed; }
-    .danger { background:#3a1f1f; }
-    .danger:hover { background:#452525; }
     .ok { color:#a8ffb3; }
     .warn { color:#ffd37a; }
     .err { color:#ff9a9a; }
@@ -36,7 +34,6 @@
     @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
     .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:260px; overflow:auto; }
     .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
-    .right { text-align:right; }
   </style>
 </head>
 <body>
@@ -53,7 +50,7 @@
         <select id="qMediaType">
           <option value="">(any)</option>
           <option value="book">book</option>
-          <option value="game">game</option>
+          <option value="video_game">video_game</option>
           <option value="movie">movie</option>
           <option value="music">music</option>
           <option value="unknown">unknown</option>
@@ -117,7 +114,7 @@
           <select id="uMediaType">
             <option value="">(no change)</option>
             <option value="book">book</option>
-            <option value="game">game</option>
+            <option value="video_game">video_game</option>
             <option value="movie">movie</option>
             <option value="music">music</option>
             <option value="unknown">unknown</option>
@@ -166,14 +163,61 @@
       </div>
     </div>
 
-  <div class="panel">
-    <h3>Reporting (loaded rows)</h3>
-    <div class="row">
-      <button id="btnReport">Generate report</button>
-      <div class="spacer"></div>
-      <button id="btnCopyReport">Copy report</button>
+    <div class="panel">
+      <h3>Reporting (loaded rows)</h3>
+
+      <div class="row">
+        <button id="btnReport">Generate charts</button>
+        <div class="spacer"></div>
+        <button id="btnExportReportPng">Export charts (PNG)</button>
+      </div>
+
+      <div class="grid2" style="margin-top:.75rem;">
+        <div class="panel" style="margin:0;">
+          <div class="small">Media type</div>
+          <canvas id="chartMediaType" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Platform (top 12)</div>
+          <canvas id="chartPlatform" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Status</div>
+          <canvas id="chartStatus" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Release year (top 20 years)</div>
+          <canvas id="chartYear" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Missing metadata</div>
+          <canvas id="chartMissing" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Locations (top 12)</div>
+          <canvas id="chartLocation" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Top authors (books only, top 12)</div>
+          <canvas id="chartTopAuthors" height="180"></canvas>
+        </div>
+
+        <div class="panel" style="margin:0;">
+          <div class="small">Authors missing (books only)</div>
+          <canvas id="chartAuthorMissingBooks" height="180"></canvas>
+        </div>
+      </div>
+
+      <div class="hint" style="margin-top:.75rem;">
+        Charts are based on the currently loaded rows (filters at the top).
+      </div>
     </div>
-    <div id="reportOut" class="log" style="margin-top:.75rem;"></div>
   </div>
 
   <div class="panel">
@@ -181,11 +225,24 @@
     <div id="logOut" class="log"></div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
 <script>
   const $ = (id) => document.getElementById(id);
 
-  let loaded = [];      // array of media rows (objects)
-  let selected = new Set(); // ids (numbers)
+  let loaded = [];           // array of media rows (objects)
+  let selected = new Set();  // ids (numbers)
+
+  let charts = {
+    mediaType: null,
+    platform: null,
+    status: null,
+    year: null,
+    missing: null,
+    location: null,
+    topAuthors: null,
+    authorMissingBooks: null,
+  };
 
   function log(line, cls="muted") {
     const el = $("logOut");
@@ -199,7 +256,7 @@
   function setBusy(isBusy) {
     for (const id of [
       "btnLoad","btnClear","btnSelectAll","btnSelectNone","btnInvertSel","btnExportCsv",
-      "btnBulkUpdate","btnReport","btnCopyReport"
+      "btnBulkUpdate","btnReport","btnExportReportPng"
     ]) {
       const b = $(id);
       if (b) b.disabled = isBusy;
@@ -323,7 +380,7 @@
     loaded = [];
     selected = new Set();
     renderTable();
-    $("reportOut").textContent = "";
+    destroyAllCharts();
     log("Cleared filters and loaded data.", "ok");
   }
 
@@ -333,7 +390,6 @@
       const qs = getQueryString();
       log(`Loading /media${qs || ""} ...`);
       loaded = await apiJson(`/media${qs}`, { method:"GET" });
-      // keep selection only for ids still present
       const present = new Set(loaded.map(r => Number(r.id)));
       selected = new Set([...selected].filter(id => present.has(id)));
       renderTable();
@@ -397,7 +453,7 @@
       }
 
       log(`Bulk update done. ok=${ok} fail=${fail}`, fail ? "warn" : "ok");
-      await loadMedia(); // refresh table
+      await loadMedia();
     } finally {
       setBusy(false);
     }
@@ -432,20 +488,164 @@
     log(`Exported CSV (${loaded.length} rows).`, "ok");
   }
 
-  function report() {
+  // ---------------- Reporting (charts) ----------------
+
+  function destroyChart(c) {
+    if (c) c.destroy();
+    return null;
+  }
+
+  function destroyAllCharts() {
+    charts.mediaType = destroyChart(charts.mediaType);
+    charts.platform = destroyChart(charts.platform);
+    charts.status = destroyChart(charts.status);
+    charts.year = destroyChart(charts.year);
+    charts.missing = destroyChart(charts.missing);
+    charts.location = destroyChart(charts.location);
+    charts.topAuthors = destroyChart(charts.topAuthors);
+    charts.authorMissingBooks = destroyChart(charts.authorMissingBooks);
+  }
+
+  function countByKey(rows, keyFn) {
+    const m = new Map();
+    for (const r of rows) {
+      const k = keyFn(r);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }
+
+  function topNEntries(map, n) {
+    return [...map.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n);
+  }
+
+  function isEmpty(v) {
+    return v === null || v === undefined || String(v).trim() === "";
+  }
+
+  function ensureLoadedForReport() {
+    if (!Array.isArray(loaded) || loaded.length === 0) {
+      log("No loaded rows. Click Load first.", "warn");
+      return false;
+    }
+    if (typeof Chart === "undefined") {
+      log("Chart.js failed to load (CDN).", "err");
+      return false;
+    }
+    return true;
+  }
+
+  function chartCommonScales() {
+    return {
+      x: { ticks: { color: "#bdbdbd" }, grid: { color: "#2a2a2a" } },
+      y: { ticks: { color: "#bdbdbd" }, grid: { color: "#2a2a2a" }, beginAtZero: true },
+    };
+  }
+
+  function buildBarChart(canvasId, labels, values, title) {
+    const ctx = document.getElementById(canvasId);
+    return new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{ label: title, data: values }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: true },
+        },
+        scales: chartCommonScales()
+      }
+    });
+  }
+
+  function buildDoughnutChart(canvasId, labels, values, title) {
+    const ctx = document.getElementById(canvasId);
+    return new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [{ label: title, data: values }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "bottom", labels: { color: "#bdbdbd" } },
+          tooltip: { enabled: true },
+        }
+      }
+    });
+  }
+
+  function generateCharts() {
+    if (!ensureLoadedForReport()) return;
+
     const rows = loaded;
 
-    const countBy = (keyFn) => {
-      const m = new Map();
-      for (const r of rows) {
-        const k = keyFn(r);
-        m.set(k, (m.get(k) || 0) + 1);
-      }
-      return [...m.entries()].sort((a,b) => b[1] - a[1]);
-    };
+    // Media type (doughnut)
+    const mtMap = countByKey(rows, r => (r.media_type && String(r.media_type).trim()) ? String(r.media_type) : "null");
+    const mtEntries = topNEntries(mtMap, 20);
+    charts.mediaType = destroyChart(charts.mediaType);
+    charts.mediaType = buildDoughnutChart(
+      "chartMediaType",
+      mtEntries.map(([k]) => k),
+      mtEntries.map(([,v]) => v),
+      "Media type"
+    );
 
-    const isEmpty = (v) => v === null || v === undefined || String(v).trim() === "";
+    // Platform (top 12 bar)
+    const platMap = countByKey(rows, r => (r.platform && String(r.platform).trim()) ? String(r.platform) : "null");
+    const platEntries = topNEntries(platMap, 12);
+    charts.platform = destroyChart(charts.platform);
+    charts.platform = buildBarChart(
+      "chartPlatform",
+      platEntries.map(([k]) => k),
+      platEntries.map(([,v]) => v),
+      "Platform"
+    );
 
+    // Status (doughnut)
+    const statusMap = countByKey(rows, r => (r.status && String(r.status).trim()) ? String(r.status) : "null");
+    const statusEntries = topNEntries(statusMap, 20);
+    charts.status = destroyChart(charts.status);
+    charts.status = buildDoughnutChart(
+      "chartStatus",
+      statusEntries.map(([k]) => k),
+      statusEntries.map(([,v]) => v),
+      "Status"
+    );
+
+    // Release year (top 20 years bar)
+    const yearMap = countByKey(rows, r => {
+      const y = r.release_year;
+      if (y === null || y === undefined || y === "") return "null";
+      return String(y);
+    });
+    const yearTop = topNEntries(yearMap, 60); // take more then sort for nicer chronology
+    const yearEntries = yearTop.sort((a,b) => {
+      const ak = a[0], bk = b[0];
+      if (ak === "null") return 1;
+      if (bk === "null") return -1;
+      const an = Number(ak), bn = Number(bk);
+      if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+      return ak.localeCompare(bk);
+    }).slice(0, 20);
+
+    charts.year = destroyChart(charts.year);
+    charts.year = buildBarChart(
+      "chartYear",
+      yearEntries.map(([k]) => k),
+      yearEntries.map(([,v]) => v),
+      "Release year"
+    );
+
+    // Missing metadata (bar)
     const missing = {
       media_type: rows.filter(r => isEmpty(r.media_type) || r.media_type === "unknown").length,
       author: rows.filter(r => isEmpty(r.author)).length,
@@ -459,57 +659,83 @@
       source: rows.filter(r => isEmpty(r.source)).length,
     };
 
-    const lines = [];
-    lines.push(`Loaded rows: ${rows.length}`);
-    lines.push("");
+    charts.missing = destroyChart(charts.missing);
+    charts.missing = buildBarChart(
+      "chartMissing",
+      Object.keys(missing),
+      Object.values(missing),
+      "Missing count"
+    );
 
-    lines.push("Counts by media_type:");
-    for (const [k,v] of countBy(r => (r.media_type || "null"))) lines.push(`  ${k}: ${v}`);
-    lines.push("");
+    // Location (top 12 bar)
+    const locMap = countByKey(rows, r => (r.location && String(r.location).trim()) ? String(r.location) : "null");
+    const locEntries = topNEntries(locMap, 12);
+    charts.location = destroyChart(charts.location);
+    charts.location = buildBarChart(
+      "chartLocation",
+      locEntries.map(([k]) => k),
+      locEntries.map(([,v]) => v),
+      "Location"
+    );
 
-    lines.push("Counts by platform:");
-    for (const [k,v] of countBy(r => (r.platform || "null"))) lines.push(`  ${k}: ${v}`);
-    lines.push("");
+    // Top authors (books only, top 12 bar)
+    const bookRows = rows.filter(r => String(r.media_type || "").trim() === "book");
+    const authorMap = countByKey(bookRows, r => (r.author && String(r.author).trim()) ? String(r.author) : "null");
+    const authorEntries = topNEntries(authorMap, 12);
+    charts.topAuthors = destroyChart(charts.topAuthors);
+    charts.topAuthors = buildBarChart(
+      "chartTopAuthors",
+      authorEntries.map(([k]) => k),
+      authorEntries.map(([,v]) => v),
+      "Top authors (books)"
+    );
 
-    lines.push("Counts by status:");
-    for (const [k,v] of countBy(r => (r.status || "null"))) lines.push(`  ${k}: ${v}`);
-    lines.push("");
+    // Authors missing (books only) (simple 2-slice doughnut)
+    const missingAuthors = bookRows.filter(r => isEmpty(r.author)).length;
+    const presentAuthors = Math.max(0, bookRows.length - missingAuthors);
+    charts.authorMissingBooks = destroyChart(charts.authorMissingBooks);
+    charts.authorMissingBooks = buildDoughnutChart(
+      "chartAuthorMissingBooks",
+      ["present", "missing"],
+      [presentAuthors, missingAuthors],
+      "Book author completeness"
+    );
 
-    lines.push("Counts by location:");
-    for (const [k,v] of countBy(r => (r.location || "null"))) lines.push(`  ${k}: ${v}`);
-    lines.push("");
-
-    lines.push("Missing / needs enrichment:");
-    for (const [k,v] of Object.entries(missing)) lines.push(`  ${k}: ${v}`);
-    lines.push("");
-
-    // top recent updated/added (best-effort; timestamps may be null)
-    const byUpdated = [...rows].sort((a,b) => String(b.updated_at||"").localeCompare(String(a.updated_at||"")));
-    lines.push("Top 10 recently updated (by updated_at):");
-    for (const r of byUpdated.slice(0,10)) {
-      lines.push(`  id=${r.id} updated_at=${r.updated_at||""} title=${(r.title||"").slice(0,60)}`);
-    }
-
-    const out = lines.join("\n");
-    $("reportOut").textContent = out;
-    log("Generated report.", "ok");
+    log("Generated charts.", "ok");
   }
 
-  async function copyReport() {
-    const txt = $("reportOut").textContent || "";
-    if (!txt.trim()) {
-      log("No report to copy.", "warn");
-      return;
+  async function exportChartsPng() {
+    if (!ensureLoadedForReport()) return;
+
+    const ids = [
+      ["chartMediaType", "media_type"],
+      ["chartPlatform", "platform"],
+      ["chartStatus", "status"],
+      ["chartYear", "release_year"],
+      ["chartMissing", "missing"],
+      ["chartLocation", "location"],
+      ["chartTopAuthors", "top_authors_books"],
+      ["chartAuthorMissingBooks", "author_missing_books"],
+    ];
+
+    const stamp = new Date().toISOString().slice(0,10);
+    for (const [canvasId, name] of ids) {
+      const c = document.getElementById(canvasId);
+      if (!c) continue;
+      const url = c.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `media_report_${name}_${stamp}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     }
-    try {
-      await navigator.clipboard.writeText(txt);
-      log("Report copied to clipboard.", "ok");
-    } catch (e) {
-      log(`Copy failed: ${String(e)}`, "err");
-    }
+
+    log("Exported chart PNGs.", "ok");
   }
 
-  // wiring
+  // ---------------- wiring ----------------
+
   $("btnLoad").addEventListener("click", loadMedia);
   $("btnClear").addEventListener("click", clearUI);
   $("btnSelectAll").addEventListener("click", selectAll);
@@ -517,8 +743,9 @@
   $("btnInvertSel").addEventListener("click", invertSelection);
   $("btnExportCsv").addEventListener("click", exportCsv);
   $("btnBulkUpdate").addEventListener("click", bulkUpdate);
-  $("btnReport").addEventListener("click", report);
-  $("btnCopyReport").addEventListener("click", copyReport);
+
+  $("btnReport").addEventListener("click", generateCharts);
+  $("btnExportReportPng").addEventListener("click", exportChartsPng);
 
   $("chkAll").addEventListener("change", (e) => {
     if (e.target.checked) selectAll();

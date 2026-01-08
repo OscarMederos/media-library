@@ -35,7 +35,7 @@
     .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:260px; overflow:auto; }
     .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
 
-    /* chart sizing fixes (prevents infinite growth / resize feedback loops) */
+    /* --- chart sizing fixes (prevents infinite growth / resize feedback loops) --- */
     .chartTile { margin:0; height:260px; display:flex; flex-direction:column; }
     .chartTitle { font-size:.85rem; color:var(--muted); margin-bottom:.35rem; }
     .chartBox { flex:1; min-height:0; }
@@ -169,7 +169,7 @@
       </div>
     </div>
 
-    <!-- REPORTING (REDONE) -->
+    <!-- Reporting (ONLY charts requested) -->
     <div class="panel">
       <h3>Reporting (loaded rows)</h3>
 
@@ -186,17 +186,17 @@
         </div>
 
         <div class="panel chartTile">
-          <div class="chartTitle">Books missing author</div>
+          <div class="chartTitle">Books missing author (book only)</div>
           <div class="chartBox"><canvas id="chartBooksMissingAuthor"></canvas></div>
         </div>
 
         <div class="panel chartTile">
-          <div class="chartTitle">Games missing platform</div>
+          <div class="chartTitle">Games missing platform (games only)</div>
           <div class="chartBox"><canvas id="chartGamesMissingPlatform"></canvas></div>
         </div>
 
         <div class="panel chartTile">
-          <div class="chartTitle">Movies missing format</div>
+          <div class="chartTitle">Movies missing format (movie only)</div>
           <div class="chartBox"><canvas id="chartMoviesMissingFormat"></canvas></div>
         </div>
       </div>
@@ -217,8 +217,8 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
-  let loaded = [];
-  let selected = new Set();
+  let loaded = [];           // array of media rows (objects)
+  let selected = new Set();  // ids (numbers)
 
   let charts = {
     mediaType: null,
@@ -341,10 +341,12 @@
     selected = new Set(loaded.map(r => Number(r.id)));
     renderTable();
   }
+
   function selectNone() {
     selected = new Set();
     renderTable();
   }
+
   function invertSelection() {
     const next = new Set();
     for (const r of loaded) {
@@ -471,7 +473,7 @@
     log(`Exported CSV (${loaded.length} rows).`, "ok");
   }
 
-  // ---------------- Reporting (REDONE) ----------------
+  // ---------------- Reporting (charts) ----------------
 
   function destroyChart(c) {
     if (c) c.destroy();
@@ -488,11 +490,28 @@
   function recreateCanvas(canvasId) {
     const oldCanvas = document.getElementById(canvasId);
     if (!oldCanvas) return null;
+
     const parent = oldCanvas.parentElement;
     const newCanvas = document.createElement("canvas");
     newCanvas.id = canvasId;
+
     parent.replaceChild(newCanvas, oldCanvas);
     return newCanvas;
+  }
+
+  function countByKey(rows, keyFn) {
+    const m = new Map();
+    for (const r of rows) {
+      const k = keyFn(r);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }
+
+  function topNEntries(map, n) {
+    return [...map.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n);
   }
 
   function isEmpty(v) {
@@ -511,16 +530,7 @@
     return true;
   }
 
-  function countByKey(rows, keyFn) {
-    const m = new Map();
-    for (const r of rows) {
-      const k = keyFn(r);
-      m.set(k, (m.get(k) || 0) + 1);
-    }
-    return [...m.entries()].sort((a,b) => b[1] - a[1]);
-  }
-
-  function buildDoughnut(canvasId, labels, values, title) {
+  function buildDoughnutChart(canvasId, labels, values, title) {
     const canvas = recreateCanvas(canvasId);
     return new Chart(canvas, {
       type: "doughnut",
@@ -545,57 +555,52 @@
     const rows = loaded;
 
     // 1) Media type
-    const mtEntries = countByKey(rows, r => {
-      const mt = String(r.media_type || "").trim();
-      return mt ? mt : "null";
-    });
-    charts.mediaType = buildDoughnut(
+    const mtMap = countByKey(rows, r => (r.media_type && String(r.media_type).trim()) ? String(r.media_type) : "null");
+    const mtEntries = topNEntries(mtMap, 50);
+    charts.mediaType = buildDoughnutChart(
       "chartMediaType",
       mtEntries.map(([k]) => k),
       mtEntries.map(([,v]) => v),
       "Media type"
     );
 
-    // Normalize games: your DB uses "game", but accept "game"/"games" too
     const mtLower = (r) => String(r.media_type || "").trim().toLowerCase();
     const isBook = (r) => mtLower(r) === "book";
-    //const isGame = (r) => {
-    //  const v = mtLower(r);
-    //  return v === "video_game" || v === "game" || v === "games";
-    };
     const isMovie = (r) => mtLower(r) === "movie";
+    const isGame = (r) => mtLower(r) == "game";
+    };
 
     // 2) Books missing author (book only)
     const bookRows = rows.filter(isBook);
-    const bookMissingAuthor = bookRows.filter(r => isEmpty(r.author)).length;
-    const bookHasAuthor = Math.max(0, bookRows.length - bookMissingAuthor);
-    charts.booksMissingAuthor = buildDoughnut(
+    const booksMissingAuthor = bookRows.filter(r => isEmpty(r.author)).length;
+    const booksHasAuthor = Math.max(0, bookRows.length - booksMissingAuthor);
+    charts.booksMissingAuthor = buildDoughnutChart(
       "chartBooksMissingAuthor",
       ["has author", "missing author"],
-      [bookHasAuthor, bookMissingAuthor],
-      "Books: author completeness"
+      [booksHasAuthor, booksMissingAuthor],
+      "Books missing author"
     );
 
-    // 3) Games missing platform (games only)
+    // 3) Games missing platform (game/game only)
     const gameRows = rows.filter(isGame);
-    const gameMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).length;
-    const gameHasPlatform = Math.max(0, gameRows.length - gameMissingPlatform);
-    charts.gamesMissingPlatform = buildDoughnut(
+    const gamesMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).length;
+    const gamesHasPlatform = Math.max(0, gameRows.length - gamesMissingPlatform);
+    charts.gamesMissingPlatform = buildDoughnutChart(
       "chartGamesMissingPlatform",
       ["has platform", "missing platform"],
-      [gameHasPlatform, gameMissingPlatform],
-      "Games: platform completeness"
+      [gamesHasPlatform, gamesMissingPlatform],
+      "Games missing platform"
     );
 
-    // 4) Movies missing format (movies only)
+    // 4) Movies missing format (movie only)
     const movieRows = rows.filter(isMovie);
-    const movieMissingFormat = movieRows.filter(r => isEmpty(r.format)).length;
-    const movieHasFormat = Math.max(0, movieRows.length - movieMissingFormat);
-    charts.moviesMissingFormat = buildDoughnut(
+    const moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).length;
+    const moviesHasFormat = Math.max(0, movieRows.length - moviesMissingFormat);
+    charts.moviesMissingFormat = buildDoughnutChart(
       "chartMoviesMissingFormat",
       ["has format", "missing format"],
-      [movieHasFormat, movieMissingFormat],
-      "Movies: format completeness"
+      [moviesHasFormat, moviesMissingFormat],
+      "Movies missing format"
     );
 
     log("Generated charts.", "ok");

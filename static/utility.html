@@ -2,20 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Media Library Utilities</title>
+  <title>Media Library Reporting</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root { --bg:#0f0f0f; --panel:#171717; --panel2:#1f1f1f; --text:#fff; --muted:#bdbdbd; --line:#2a2a2a; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0; padding:1rem; }
-    h2 { margin: .25rem 0 1rem; }
-    h3 { margin: 1.25rem 0 .5rem; }
-    .row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:flex-end; }
+    h2 { margin:.25rem 0 1rem; }
     .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:1rem; }
-    .panel + .panel { margin-top:1rem; }
-    label { font-size:.9rem; color:var(--muted); display:block; margin:0 0 .25rem; }
-    input, select, textarea { background:var(--panel2); border:1px solid var(--line); border-radius:12px; color:var(--text); padding:.6rem .7rem; font-size:1rem; }
-    input[type="number"]{ width:8rem; }
-    textarea { width:100%; min-height:72px; resize:vertical; }
+    .row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:center; }
+    .spacer { flex:1; }
     button { background:#2b2b2b; border:1px solid var(--line); color:var(--text); padding:.65rem .9rem; border-radius:12px; cursor:pointer; }
     button:hover { background:#353535; }
     button:disabled { opacity:.55; cursor:not-allowed; }
@@ -23,19 +18,12 @@
     .warn { color:#ffd37a; }
     .err { color:#ff9a9a; }
     .muted { color:var(--muted); }
-    .spacer { flex:1; }
-    table { width:100%; border-collapse:collapse; margin-top:.75rem; overflow:hidden; border-radius:12px; }
-    th, td { border-bottom:1px solid var(--line); padding:.55rem .5rem; text-align:left; vertical-align:top; }
-    th { color:var(--muted); font-weight:600; font-size:.9rem; background:#141414; position:sticky; top:0; z-index:1; }
-    tr:hover td { background:#141414; }
-    .small { font-size:.85rem; color:var(--muted); }
     .pill { display:inline-block; padding:.15rem .5rem; border-radius:999px; border:1px solid var(--line); background:#151515; }
-    .grid2 { display:grid; gap:.75rem; grid-template-columns: 1fr 1fr; }
+    .grid2 { display:grid; gap:.75rem; grid-template-columns: 1fr 1fr; margin-top:.75rem; }
     @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
-    .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:260px; overflow:auto; }
-    .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
+    .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:240px; overflow:auto; margin-top:.75rem; }
 
-    /* --- chart sizing fixes (prevents infinite growth / resize feedback loops) --- */
+    /* chart sizing fixes */
     .chartTile { margin:0; height:260px; display:flex; flex-direction:column; }
     .chartTitle { font-size:.85rem; color:var(--muted); margin-bottom:.35rem; }
     .chartBox { flex:1; min-height:0; }
@@ -43,615 +31,261 @@
   </style>
 </head>
 <body>
-  <h2>Media Library Utilities</h2>
+  <h2>Media Library Reporting</h2>
 
   <div class="panel">
     <div class="row">
-      <div>
-        <label>Search (title LIKE)</label>
-        <input id="qSearch" placeholder="e.g. Zelda" />
-      </div>
-      <div>
-        <label>Media Type (exact)</label>
-        <select id="qMediaType">
-          <option value="">(any)</option>
-          <option value="book">book</option>
-          <option value="game">game</option>
-          <option value="movie">movie</option>
-          <option value="music">music</option>
-          <option value="unknown">unknown</option>
-        </select>
-      </div>
-      <div>
-        <label>Author (exact)</label>
-        <input id="qAuthor" placeholder="e.g. Brandon Sanderson" />
-      </div>
-      <div>
-        <label>Platform (exact)</label>
-        <input id="qPlatform" placeholder="e.g. PS5" />
-      </div>
+      <button id="btnLoad">Load data</button>
+      <button id="btnReport">Generate charts</button>
+      <button id="btnExportPng">Export charts (PNG)</button>
       <div class="spacer"></div>
-      <button id="btnLoad">Load</button>
-      <button id="btnClear">Clear</button>
-    </div>
-
-    <div class="row" style="margin-top:.75rem;">
-      <div class="small">
-        Loaded: <span id="loadedCount" class="pill">0</span>
-        Selected: <span id="selectedCount" class="pill">0</span>
-      </div>
-      <div class="spacer"></div>
-      <button id="btnSelectAll">Select all</button>
-      <button id="btnSelectNone">Select none</button>
-      <button id="btnInvertSel">Invert</button>
-      <button id="btnExportCsv">Export CSV (loaded)</button>
-    </div>
-
-    <div style="margin-top:.75rem; overflow:auto; max-height:55vh; border-radius:12px;">
-      <table id="tbl">
-        <thead>
-          <tr>
-            <th style="width:44px;"><input type="checkbox" id="chkAll" /></th>
-            <th style="width:64px;">ID</th>
-            <th style="width:140px;">Barcode</th>
-            <th>Title</th>
-            <th style="width:120px;">Type</th>
-            <th style="width:140px;">Author</th>
-            <th style="width:120px;">Platform</th>
-            <th style="width:120px;">Format</th>
-            <th style="width:140px;">Location</th>
-            <th style="width:120px;">Status</th>
-            <th style="width:90px;">Year</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="grid2">
-    <div class="panel">
-      <h3>Bulk edit (selected items)</h3>
-      <div class="hint">Only fields you fill in are updated; blanks are ignored.</div>
-
-      <div class="row" style="margin-top:.75rem;">
-        <div style="min-width:220px;">
-          <label>Set Media Type</label>
-          <select id="uMediaType">
-            <option value="">(no change)</option>
-            <option value="book">book</option>
-            <option value="game">game</option>
-            <option value="movie">movie</option>
-            <option value="music">music</option>
-            <option value="unknown">unknown</option>
-          </select>
-        </div>
-        <div style="min-width:220px;">
-          <label>Set Platform</label>
-          <input id="uPlatform" placeholder="e.g. Switch" />
-        </div>
-        <div style="min-width:220px;">
-          <label>Set Format</label>
-          <input id="uFormat" placeholder="e.g. Blu-ray" />
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:.75rem;">
-        <div style="min-width:220px;">
-          <label>Set Location</label>
-          <input id="uLocation" placeholder="e.g. Shelf A2" />
-        </div>
-        <div style="min-width:220px;">
-          <label>Set Status</label>
-          <input id="uStatus" placeholder="e.g. Owned / Wishlist / Loaned" />
-        </div>
-        <div>
-          <label>Set Release Year</label>
-          <input id="uYear" type="number" min="0" step="1" placeholder="e.g. 1998" />
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:.75rem;">
-        <div style="min-width:220px;">
-          <label>Set Author</label>
-          <input id="uAuthor" placeholder="(books)" />
-        </div>
-        <div style="min-width:220px;">
-          <label>Set Notes</label>
-          <input id="uNotes" placeholder="short note (optional)" />
-        </div>
-        <div class="spacer"></div>
-        <button id="btnBulkUpdate">Apply bulk update</button>
-      </div>
-
-      <div class="hint warn" style="margin-top:.5rem;">
-        Tip: If you need “clear this field” behavior, add a dedicated endpoint later. With the current API, <span class="pill">null</span> means “no change”.
+      <div class="muted">
+        Loaded rows: <span id="loadedCount" class="pill">0</span>
       </div>
     </div>
 
-    <!-- Reporting (ONLY charts requested) -->
-    <div class="panel">
-      <h3>Reporting (loaded rows)</h3>
-
-      <div class="row">
-        <button id="btnReport">Generate charts</button>
-        <div class="spacer"></div>
-        <button id="btnExportReportPng">Export charts (PNG)</button>
+    <div class="grid2">
+      <div class="panel chartTile">
+        <div class="chartTitle">Media type</div>
+        <div class="chartBox"><canvas id="chartMediaType"></canvas></div>
       </div>
 
-      <div class="grid2" style="margin-top:.75rem;">
-        <div class="panel chartTile">
-          <div class="chartTitle">Media type</div>
-          <div class="chartBox"><canvas id="chartMediaType"></canvas></div>
-        </div>
-
-        <div class="panel chartTile">
-          <div class="chartTitle">Books missing author (book only)</div>
-          <div class="chartBox"><canvas id="chartBooksMissingAuthor"></canvas></div>
-        </div>
-
-        <div class="panel chartTile">
-          <div class="chartTitle">Games missing platform (games only)</div>
-          <div class="chartBox"><canvas id="chartGamesMissingPlatform"></canvas></div>
-        </div>
-
-        <div class="panel chartTile">
-          <div class="chartTitle">Movies missing format (movie only)</div>
-          <div class="chartBox"><canvas id="chartMoviesMissingFormat"></canvas></div>
-        </div>
+      <div class="panel chartTile">
+        <div class="chartTitle">Books missing author (book only)</div>
+        <div class="chartBox"><canvas id="chartBooksMissingAuthor"></canvas></div>
       </div>
 
-      <div class="hint" style="margin-top:.75rem;">
-        Charts are based on the currently loaded rows (filters at the top).
+      <div class="panel chartTile">
+        <div class="chartTitle">Games missing platform (game/video_game only)</div>
+        <div class="chartBox"><canvas id="chartGamesMissingPlatform"></canvas></div>
+      </div>
+
+      <div class="panel chartTile">
+        <div class="chartTitle">Movies missing format (movie only)</div>
+        <div class="chartBox"><canvas id="chartMoviesMissingFormat"></canvas></div>
       </div>
     </div>
-  </div>
 
-  <div class="panel">
-    <h3>Run log</h3>
     <div id="logOut" class="log"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
 
-<script>
-  const $ = (id) => document.getElementById(id);
+    let loaded = [];
+    let charts = {
+      mediaType: null,
+      booksMissingAuthor: null,
+      gamesMissingPlatform: null,
+      moviesMissingFormat: null,
+    };
 
-  let loaded = [];           // array of media rows (objects)
-  let selected = new Set();  // ids (numbers)
-
-  let charts = {
-    mediaType: null,
-    booksMissingAuthor: null,
-    gamesMissingPlatform: null,
-    moviesMissingFormat: null,
-  };
-
-  function log(line, cls="muted") {
-    const el = $("logOut");
-    const span = document.createElement("div");
-    span.className = cls;
-    span.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
-    el.appendChild(span);
-    el.scrollTop = el.scrollHeight;
-  }
-
-  function setBusy(isBusy) {
-    for (const id of [
-      "btnLoad","btnClear","btnSelectAll","btnSelectNone","btnInvertSel","btnExportCsv",
-      "btnBulkUpdate","btnReport","btnExportReportPng"
-    ]) {
-      const b = $(id);
-      if (b) b.disabled = isBusy;
+    function log(line, cls="muted") {
+      const el = $("logOut");
+      const div = document.createElement("div");
+      div.className = cls;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
+      el.appendChild(div);
+      el.scrollTop = el.scrollHeight;
     }
-    $("chkAll").disabled = isBusy;
-  }
 
-  async function apiJson(url, opts={}) {
-    const r = await fetch(url, {
-      headers: { "Content-Type":"application/json", ...(opts.headers||{}) },
-      ...opts
-    });
-    if (!r.ok) {
-      let detail = "";
-      try { detail = (await r.json())?.detail ?? ""; } catch (_) {}
-      throw new Error(`HTTP ${r.status} ${r.statusText}${detail ? " - " + detail : ""}`);
+    function setBusy(isBusy) {
+      for (const id of ["btnLoad","btnReport","btnExportPng"]) {
+        $(id).disabled = isBusy;
+      }
     }
-    return r.json();
-  }
 
-  function getQueryString() {
-    const params = new URLSearchParams();
-    const search = $("qSearch").value.trim();
-    const mt = $("qMediaType").value.trim();
-    const author = $("qAuthor").value.trim();
-    const platform = $("qPlatform").value.trim();
-
-    if (search) params.set("search", search);
-    if (mt) params.set("media_type", mt);
-    if (author) params.set("author", author);
-    if (platform) params.set("platform", platform);
-
-    const qs = params.toString();
-    return qs ? `?${qs}` : "";
-  }
-
-  function normalizeInt(v) {
-    if (v === null || v === undefined) return null;
-    const s = String(v).trim();
-    if (!s) return null;
-    const n = Number(s);
-    return Number.isFinite(n) ? Math.trunc(n) : null;
-  }
-
-  function renderTable() {
-    const tbody = $("tbl").querySelector("tbody");
-    tbody.innerHTML = "";
-
-    for (const row of loaded) {
-      const tr = document.createElement("tr");
-
-      const id = Number(row.id);
-      const isSel = selected.has(id);
-
-      const tdChk = document.createElement("td");
-      const chk = document.createElement("input");
-      chk.type = "checkbox";
-      chk.checked = isSel;
-      chk.addEventListener("change", () => {
-        if (chk.checked) selected.add(id);
-        else selected.delete(id);
-        updateCounts();
+    async function apiJson(url, opts={}) {
+      const r = await fetch(url, {
+        headers: { "Content-Type":"application/json", ...(opts.headers||{}) },
+        ...opts
       });
-      tdChk.appendChild(chk);
-      tr.appendChild(tdChk);
 
-      const cells = [
-        row.id,
-        row.barcode ?? "",
-        row.title ?? "",
-        row.media_type ?? "",
-        row.author ?? "",
-        row.platform ?? "",
-        row.format ?? "",
-        row.location ?? "",
-        row.status ?? "",
-        row.release_year ?? ""
+      if (!r.ok) {
+        const ct = r.headers.get("content-type") || "";
+        let detail = "";
+        if (ct.includes("application/json")) {
+          try { detail = (await r.json())?.detail ?? ""; } catch (_) {}
+        } else {
+          try { detail = (await r.text()).slice(0, 200); } catch (_) {}
+        }
+        throw new Error(`HTTP ${r.status} ${r.statusText}${detail ? " - " + detail : ""}`);
+      }
+
+      return r.json();
+    }
+
+    function isEmpty(v) {
+      return v === null || v === undefined || String(v).trim() === "";
+    }
+
+    function mtLower(r) {
+      return String(r.media_type || "").trim().toLowerCase();
+    }
+
+    function isBook(r) { return mtLower(r) === "book"; }
+    function isMovie(r) { return mtLower(r) === "movie"; }
+    // main.py can infer "game" from UPC; some manual entries may be "video_game"
+    function isGame(r) {
+      const v = mtLower(r);
+      return v === "game" || v === "video_game" || v === "games";
+    }
+
+    function destroyChart(c) {
+      if (c) c.destroy();
+      return null;
+    }
+
+    function destroyAllCharts() {
+      charts.mediaType = destroyChart(charts.mediaType);
+      charts.booksMissingAuthor = destroyChart(charts.booksMissingAuthor);
+      charts.gamesMissingPlatform = destroyChart(charts.gamesMissingPlatform);
+      charts.moviesMissingFormat = destroyChart(charts.moviesMissingFormat);
+    }
+
+    function recreateCanvas(canvasId) {
+      const oldCanvas = document.getElementById(canvasId);
+      if (!oldCanvas) return null;
+      const parent = oldCanvas.parentElement;
+      const newCanvas = document.createElement("canvas");
+      newCanvas.id = canvasId;
+      parent.replaceChild(newCanvas, oldCanvas);
+      return newCanvas;
+    }
+
+    function buildDoughnut(canvasId, labels, values, title) {
+      const canvas = recreateCanvas(canvasId);
+      return new Chart(canvas, {
+        type: "doughnut",
+        data: { labels, datasets: [{ label: title, data: values }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: true } }
+        }
+      });
+    }
+
+    function countMediaTypes(rows) {
+      const m = new Map();
+      for (const r of rows) {
+        const mt = String(r.media_type || "").trim();
+        const k = mt ? mt : "null";
+        m.set(k, (m.get(k) || 0) + 1);
+      }
+      return [...m.entries()].sort((a,b) => b[1] - a[1]);
+    }
+
+    async function loadData() {
+      setBusy(true);
+      try {
+        log("Loading /media ...");
+        loaded = await apiJson("/media", { method: "GET" });
+        $("loadedCount").textContent = String(Array.isArray(loaded) ? loaded.length : 0);
+        log(`Loaded ${loaded.length} rows.`, "ok");
+      } catch (e) {
+        log(String(e), "err");
+        loaded = [];
+        $("loadedCount").textContent = "0";
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    function generateCharts() {
+      if (!Array.isArray(loaded) || loaded.length === 0) {
+        log("No loaded rows. Click Load data first.", "warn");
+        return;
+      }
+      if (typeof Chart === "undefined") {
+        log("Chart.js failed to load (CDN).", "err");
+        return;
+      }
+
+      destroyAllCharts();
+
+      // 1) media type
+      const mtEntries = countMediaTypes(loaded);
+      charts.mediaType = buildDoughnut(
+        "chartMediaType",
+        mtEntries.map(([k]) => k),
+        mtEntries.map(([,v]) => v),
+        "Media type"
+      );
+
+      // 2) books missing author
+      const bookRows = loaded.filter(isBook);
+      const booksMissingAuthor = bookRows.filter(r => isEmpty(r.author)).length;
+      const booksHasAuthor = Math.max(0, bookRows.length - booksMissingAuthor);
+      charts.booksMissingAuthor = buildDoughnut(
+        "chartBooksMissingAuthor",
+        ["has author", "missing author"],
+        [booksHasAuthor, booksMissingAuthor],
+        "Books missing author"
+      );
+
+      // 3) games missing platform
+      const gameRows = loaded.filter(isGame);
+      const gamesMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).length;
+      const gamesHasPlatform = Math.max(0, gameRows.length - gamesMissingPlatform);
+      charts.gamesMissingPlatform = buildDoughnut(
+        "chartGamesMissingPlatform",
+        ["has platform", "missing platform"],
+        [gamesHasPlatform, gamesMissingPlatform],
+        "Games missing platform"
+      );
+
+      // 4) movies missing format
+      const movieRows = loaded.filter(isMovie);
+      const moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).length;
+      const moviesHasFormat = Math.max(0, movieRows.length - moviesMissingFormat);
+      charts.moviesMissingFormat = buildDoughnut(
+        "chartMoviesMissingFormat",
+        ["has format", "missing format"],
+        [moviesHasFormat, moviesMissingFormat],
+        "Movies missing format"
+      );
+
+      log("Generated charts.", "ok");
+    }
+
+    function exportChartsPng() {
+      if (!Array.isArray(loaded) || loaded.length === 0) {
+        log("No loaded rows.", "warn");
+        return;
+      }
+
+      const ids = [
+        ["chartMediaType", "media_type"],
+        ["chartBooksMissingAuthor", "books_missing_author"],
+        ["chartGamesMissingPlatform", "games_missing_platform"],
+        ["chartMoviesMissingFormat", "movies_missing_format"],
       ];
 
-      for (const val of cells) {
-        const td = document.createElement("td");
-        td.textContent = val === null || val === undefined ? "" : String(val);
-        tr.appendChild(td);
+      const stamp = new Date().toISOString().slice(0,10);
+      for (const [canvasId, name] of ids) {
+        const c = document.getElementById(canvasId);
+        if (!c) continue;
+        const url = c.toDataURL("image/png");
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `media_report_${name}_${stamp}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
       }
 
-      tbody.appendChild(tr);
+      log("Exported chart PNGs.", "ok");
     }
 
-    $("chkAll").checked = loaded.length > 0 && selected.size === loaded.length;
-    updateCounts();
-  }
+    $("btnLoad").addEventListener("click", loadData);
+    $("btnReport").addEventListener("click", generateCharts);
+    $("btnExportPng").addEventListener("click", exportChartsPng);
 
-  function updateCounts() {
-    $("loadedCount").textContent = String(loaded.length);
-    $("selectedCount").textContent = String(selected.size);
-  }
-
-  function selectAll() {
-    selected = new Set(loaded.map(r => Number(r.id)));
-    renderTable();
-  }
-
-  function selectNone() {
-    selected = new Set();
-    renderTable();
-  }
-
-  function invertSelection() {
-    const next = new Set();
-    for (const r of loaded) {
-      const id = Number(r.id);
-      if (!selected.has(id)) next.add(id);
-    }
-    selected = next;
-    renderTable();
-  }
-
-  function clearUI() {
-    $("qSearch").value = "";
-    $("qMediaType").value = "";
-    $("qAuthor").value = "";
-    $("qPlatform").value = "";
-    loaded = [];
-    selected = new Set();
-    renderTable();
-    destroyAllCharts();
-    log("Cleared filters and loaded data.", "ok");
-  }
-
-  async function loadMedia() {
-    setBusy(true);
-    try {
-      const qs = getQueryString();
-      log(`Loading /media${qs || ""} ...`);
-      loaded = await apiJson(`/media${qs}`, { method:"GET" });
-      const present = new Set(loaded.map(r => Number(r.id)));
-      selected = new Set([...selected].filter(id => present.has(id)));
-      renderTable();
-      log(`Loaded ${loaded.length} rows.`, "ok");
-    } catch (e) {
-      log(String(e), "err");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function buildUpdatePayloadFromInputs() {
-    const payload = {};
-
-    const mt = $("uMediaType").value.trim();
-    const platform = $("uPlatform").value.trim();
-    const format = $("uFormat").value.trim();
-    const location = $("uLocation").value.trim();
-    const status = $("uStatus").value.trim();
-    const year = normalizeInt($("uYear").value);
-    const author = $("uAuthor").value.trim();
-    const notes = $("uNotes").value.trim();
-
-    if (mt) payload.media_type = mt;
-    if (platform) payload.platform = platform;
-    if (format) payload.format = format;
-    if (location) payload.location = location;
-    if (status) payload.status = status;
-    if (year !== null) payload.release_year = year;
-    if (author) payload.author = author;
-    if (notes) payload.notes = notes;
-
-    return payload;
-  }
-
-  async function bulkUpdate() {
-    if (selected.size === 0) {
-      log("No selected rows.", "warn");
-      return;
-    }
-    const payload = buildUpdatePayloadFromInputs();
-    if (Object.keys(payload).length === 0) {
-      log("No fields set for update.", "warn");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      const ids = [...selected];
-      log(`Bulk updating ${ids.length} items...`);
-      let ok = 0, fail = 0;
-
-      for (const id of ids) {
-        try {
-          await apiJson(`/media/${id}`, { method:"PUT", body: JSON.stringify(payload) });
-          ok++;
-        } catch (e) {
-          fail++;
-          log(`Update failed for id=${id}: ${String(e)}`, "err");
-        }
-      }
-
-      log(`Bulk update done. ok=${ok} fail=${fail}`, fail ? "warn" : "ok");
-      await loadMedia();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  function toCsv(rows) {
-    const cols = [
-      "id","barcode","title","title_raw","media_type","author","platform","format",
-      "location","status","release_year","cover_url","notes","source","added_at","updated_at"
-    ];
-    const esc = (v) => {
-      const s = v === null || v === undefined ? "" : String(v);
-      if (/[",\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
-      return s;
-    };
-    const header = cols.join(",");
-    const body = rows.map(r => cols.map(c => esc(r[c])).join(",")).join("\n");
-    return header + "\n" + body + "\n";
-  }
-
-  async function exportCsv() {
-    const csv = toCsv(loaded);
-    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `media_export_${new Date().toISOString().slice(0,10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    log(`Exported CSV (${loaded.length} rows).`, "ok");
-  }
-
-  // ---------------- Reporting (charts) ----------------
-
-  function destroyChart(c) {
-    if (c) c.destroy();
-    return null;
-  }
-
-  function destroyAllCharts() {
-    charts.mediaType = destroyChart(charts.mediaType);
-    charts.booksMissingAuthor = destroyChart(charts.booksMissingAuthor);
-    charts.gamesMissingPlatform = destroyChart(charts.gamesMissingPlatform);
-    charts.moviesMissingFormat = destroyChart(charts.moviesMissingFormat);
-  }
-
-  function recreateCanvas(canvasId) {
-    const oldCanvas = document.getElementById(canvasId);
-    if (!oldCanvas) return null;
-
-    const parent = oldCanvas.parentElement;
-    const newCanvas = document.createElement("canvas");
-    newCanvas.id = canvasId;
-
-    parent.replaceChild(newCanvas, oldCanvas);
-    return newCanvas;
-  }
-
-  function countByKey(rows, keyFn) {
-    const m = new Map();
-    for (const r of rows) {
-      const k = keyFn(r);
-      m.set(k, (m.get(k) || 0) + 1);
-    }
-    return m;
-  }
-
-  function topNEntries(map, n) {
-    return [...map.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, n);
-  }
-
-  function isEmpty(v) {
-    return v === null || v === undefined || String(v).trim() === "";
-  }
-
-  function ensureLoadedForReport() {
-    if (!Array.isArray(loaded) || loaded.length === 0) {
-      log("No loaded rows. Click Load first.", "warn");
-      return false;
-    }
-    if (typeof Chart === "undefined") {
-      log("Chart.js failed to load (CDN).", "err");
-      return false;
-    }
-    return true;
-  }
-
-  function buildDoughnutChart(canvasId, labels, values, title) {
-    const canvas = recreateCanvas(canvasId);
-    return new Chart(canvas, {
-      type: "doughnut",
-      data: { labels, datasets: [{ label: title, data: values }] },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: { enabled: true },
-        }
-      }
-    });
-  }
-
-  function generateCharts() {
-    if (!ensureLoadedForReport()) return;
-
-    destroyAllCharts();
-
-    const rows = loaded;
-
-    // 1) Media type
-    const mtMap = countByKey(rows, r => (r.media_type && String(r.media_type).trim()) ? String(r.media_type) : "null");
-    const mtEntries = topNEntries(mtMap, 50);
-    charts.mediaType = buildDoughnutChart(
-      "chartMediaType",
-      mtEntries.map(([k]) => k),
-      mtEntries.map(([,v]) => v),
-      "Media type"
-    );
-
-    const mtLower = (r) => String(r.media_type || "").trim().toLowerCase();
-    const isBook = (r) => mtLower(r) === "book";
-    const isMovie = (r) => mtLower(r) === "movie";
-    const isGame = (r) => mtLower(r) == "game";
-    };
-
-    // 2) Books missing author (book only)
-    const bookRows = rows.filter(isBook);
-    const booksMissingAuthor = bookRows.filter(r => isEmpty(r.author)).length;
-    const booksHasAuthor = Math.max(0, bookRows.length - booksMissingAuthor);
-    charts.booksMissingAuthor = buildDoughnutChart(
-      "chartBooksMissingAuthor",
-      ["has author", "missing author"],
-      [booksHasAuthor, booksMissingAuthor],
-      "Books missing author"
-    );
-
-    // 3) Games missing platform (game/game only)
-    const gameRows = rows.filter(isGame);
-    const gamesMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).length;
-    const gamesHasPlatform = Math.max(0, gameRows.length - gamesMissingPlatform);
-    charts.gamesMissingPlatform = buildDoughnutChart(
-      "chartGamesMissingPlatform",
-      ["has platform", "missing platform"],
-      [gamesHasPlatform, gamesMissingPlatform],
-      "Games missing platform"
-    );
-
-    // 4) Movies missing format (movie only)
-    const movieRows = rows.filter(isMovie);
-    const moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).length;
-    const moviesHasFormat = Math.max(0, movieRows.length - moviesMissingFormat);
-    charts.moviesMissingFormat = buildDoughnutChart(
-      "chartMoviesMissingFormat",
-      ["has format", "missing format"],
-      [moviesHasFormat, moviesMissingFormat],
-      "Movies missing format"
-    );
-
-    log("Generated charts.", "ok");
-  }
-
-  async function exportChartsPng() {
-    if (!ensureLoadedForReport()) return;
-
-    const ids = [
-      ["chartMediaType", "media_type"],
-      ["chartBooksMissingAuthor", "books_missing_author"],
-      ["chartGamesMissingPlatform", "games_missing_platform"],
-      ["chartMoviesMissingFormat", "movies_missing_format"],
-    ];
-
-    const stamp = new Date().toISOString().slice(0,10);
-    for (const [canvasId, name] of ids) {
-      const c = document.getElementById(canvasId);
-      if (!c) continue;
-      const url = c.toDataURL("image/png");
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `media_report_${name}_${stamp}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
-
-    log("Exported chart PNGs.", "ok");
-  }
-
-  // ---------------- wiring ----------------
-
-  $("btnLoad").addEventListener("click", loadMedia);
-  $("btnClear").addEventListener("click", clearUI);
-  $("btnSelectAll").addEventListener("click", selectAll);
-  $("btnSelectNone").addEventListener("click", selectNone);
-  $("btnInvertSel").addEventListener("click", invertSelection);
-  $("btnExportCsv").addEventListener("click", exportCsv);
-  $("btnBulkUpdate").addEventListener("click", bulkUpdate);
-
-  $("btnReport").addEventListener("click", generateCharts);
-  $("btnExportReportPng").addEventListener("click", exportChartsPng);
-
-  $("chkAll").addEventListener("change", (e) => {
-    if (e.target.checked) selectAll();
-    else selectNone();
-  });
-
-  // default load
-  loadMedia();
-</script>
+    // Auto-load once
+    loadData();
+  </script>
 </body>
 </html>

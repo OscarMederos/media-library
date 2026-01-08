@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Media Library Utilities</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root { --bg:#0f0f0f; --panel:#171717; --panel2:#1f1f1f; --text:#fff; --muted:#bdbdbd; --line:#2a2a2a; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); margin:0; padding:1rem; }
+    h2 { margin: .25rem 0 1rem; }
+    h3 { margin: 1.25rem 0 .5rem; }
+    .row { display:flex; gap:.75rem; flex-wrap:wrap; align-items:flex-end; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:1rem; }
+    .panel + .panel { margin-top:1rem; }
+    label { font-size:.9rem; color:var(--muted); display:block; margin:0 0 .25rem; }
+    input, select, textarea { background:var(--panel2); border:1px solid var(--line); border-radius:12px; color:var(--text); padding:.6rem .7rem; font-size:1rem; }
+    input[type="number"]{ width:8rem; }
+    textarea { width:100%; min-height:72px; resize:vertical; }
+    button { background:#2b2b2b; border:1px solid var(--line); color:var(--text); padding:.65rem .9rem; border-radius:12px; cursor:pointer; }
+    button:hover { background:#353535; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    .danger { background:#3a1f1f; }
+    .danger:hover { background:#452525; }
+    .ok { color:#a8ffb3; }
+    .warn { color:#ffd37a; }
+    .err { color:#ff9a9a; }
+    .muted { color:var(--muted); }
+    .spacer { flex:1; }
+    table { width:100%; border-collapse:collapse; margin-top:.75rem; overflow:hidden; border-radius:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:.55rem .5rem; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; font-size:.9rem; background:#141414; position:sticky; top:0; z-index:1; }
+    tr:hover td { background:#141414; }
+    .small { font-size:.85rem; color:var(--muted); }
+    .pill { display:inline-block; padding:.15rem .5rem; border-radius:999px; border:1px solid var(--line); background:#151515; }
+    .grid2 { display:grid; gap:.75rem; grid-template-columns: 1fr 1fr; }
+    @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+    .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:260px; overflow:auto; }
+    .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
+    .right { text-align:right; }
+  </style>
+</head>
+<body>
+  <h2>Media Library Utilities</h2>
+
+  <div class="panel">
+    <div class="row">
+      <div>
+        <label>Search (title LIKE)</label>
+        <input id="qSearch" placeholder="e.g. Zelda" />
+      </div>
+      <div>
+        <label>Media Type (exact)</label>
+        <select id="qMediaType">
+          <option value="">(any)</option>
+          <option value="book">book</option>
+          <option value="video_game">video_game</option>
+          <option value="movie">movie</option>
+          <option value="music">music</option>
+          <option value="unknown">unknown</option>
+        </select>
+      </div>
+      <div>
+        <label>Author (exact)</label>
+        <input id="qAuthor" placeholder="e.g. Brandon Sanderson" />
+      </div>
+      <div>
+        <label>Platform (exact)</label>
+        <input id="qPlatform" placeholder="e.g. PS5" />
+      </div>
+      <div class="spacer"></div>
+      <button id="btnLoad">Load</button>
+      <button id="btnClear">Clear</button>
+    </div>
+
+    <div class="row" style="margin-top:.75rem;">
+      <div class="small">
+        Loaded: <span id="loadedCount" class="pill">0</span>
+        Selected: <span id="selectedCount" class="pill">0</span>
+      </div>
+      <div class="spacer"></div>
+      <button id="btnSelectAll">Select all</button>
+      <button id="btnSelectNone">Select none</button>
+      <button id="btnInvertSel">Invert</button>
+      <button id="btnExportCsv">Export CSV (loaded)</button>
+    </div>
+
+    <div style="margin-top:.75rem; overflow:auto; max-height:55vh; border-radius:12px;">
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th style="width:44px;"><input type="checkbox" id="chkAll" /></th>
+            <th style="width:64px;">ID</th>
+            <th style="width:140px;">Barcode</th>
+            <th>Title</th>
+            <th style="width:120px;">Type</th>
+            <th style="width:140px;">Author</th>
+            <th style="width:120px;">Platform</th>
+            <th style="width:120px;">Format</th>
+            <th style="width:140px;">Location</th>
+            <th style="width:120px;">Status</th>
+            <th style="width:90px;">Year</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Bulk edit (selected items)</h3>
+      <div class="hint">Only fields you fill in are updated; blanks are ignored.</div>
+
+      <div class="row" style="margin-top:.75rem;">
+        <div style="min-width:220px;">
+          <label>Set Media Type</label>
+          <select id="uMediaType">
+            <option value="">(no change)</option>
+            <option value="book">book</option>
+            <option value="video_game">video_game</option>
+            <option value="movie">movie</option>
+            <option value="music">music</option>
+            <option value="unknown">unknown</option>
+          </select>
+        </div>
+        <div style="min-width:220px;">
+          <label>Set Platform</label>
+          <input id="uPlatform" placeholder="e.g. Switch" />
+        </div>
+        <div style="min-width:220px;">
+          <label>Set Format</label>
+          <input id="uFormat" placeholder="e.g. Blu-ray" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:.75rem;">
+        <div style="min-width:220px;">
+          <label>Set Location</label>
+          <input id="uLocation" placeholder="e.g. Shelf A2" />
+        </div>
+        <div style="min-width:220px;">
+          <label>Set Status</label>
+          <input id="uStatus" placeholder="e.g. Owned / Wishlist / Loaned" />
+        </div>
+        <div>
+          <label>Set Release Year</label>
+          <input id="uYear" type="number" min="0" step="1" placeholder="e.g. 1998" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:.75rem;">
+        <div style="min-width:220px;">
+          <label>Set Author</label>
+          <input id="uAuthor" placeholder="(books)" />
+        </div>
+        <div style="min-width:220px;">
+          <label>Set Notes</label>
+          <input id="uNotes" placeholder="short note (optional)" />
+        </div>
+        <div class="spacer"></div>
+        <button id="btnBulkUpdate">Apply bulk update</button>
+      </div>
+
+      <div class="hint warn" style="margin-top:.5rem;">
+        Tip: If you need “clear this field” behavior, add a dedicated endpoint later. With the current API, <span class="pill">null</span> means “no change”.
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Enrichment</h3>
+      <div class="hint">
+        Your current backend only exposes <span class="pill">POST /scan</span>, which does not update existing rows.
+        The enrichment action below performs a <b>replace</b>: delete row → rescan barcode → re-apply preserved metadata.
+      </div>
+
+      <div class="row" style="margin-top:.75rem;">
+        <div>
+          <label>Preserve on replace</label>
+          <div class="small">
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pNotes" checked /> notes</label>
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pPlatform" checked /> platform</label>
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pFormat" checked /> format</label>
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pLocation" checked /> location</label>
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pStatus" checked /> status</label>
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pYear" checked /> release_year</label>
+            <label style="display:inline-block; margin-right:.75rem;"><input type="checkbox" id="pAuthor" checked /> author</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:.75rem;">
+        <button id="btnReplaceRescan" class="danger">Replace + Rescan (selected)</button>
+        <div class="spacer"></div>
+        <button id="btnRefreshLoaded">Refresh loaded rows</button>
+      </div>
+
+      <div class="hint warn" style="margin-top:.5rem;">
+        Replace changes IDs (new rows) and will briefly remove items if a rescan fails.
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Reporting (loaded rows)</h3>
+    <div class="row">
+      <button id="btnReport">Generate report</button>
+      <div class="spacer"></div>
+      <button id="btnCopyReport">Copy report</button>
+    </div>
+    <div id="reportOut" class="log" style="margin-top:.75rem;"></div>
+  </div>
+
+  <div class="panel">
+    <h3>Run log</h3>
+    <div id="logOut" class="log"></div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let loaded = [];      // array of media rows (objects)
+  let selected = new Set(); // ids (numbers)
+
+  function log(line, cls="muted") {
+    const el = $("logOut");
+    const span = document.createElement("div");
+    span.className = cls;
+    span.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
+    el.appendChild(span);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setBusy(isBusy) {
+    for (const id of [
+      "btnLoad","btnClear","btnSelectAll","btnSelectNone","btnInvertSel","btnExportCsv",
+      "btnBulkUpdate","btnReplaceRescan","btnRefreshLoaded","btnReport","btnCopyReport"
+    ]) {
+      const b = $(id);
+      if (b) b.disabled = isBusy;
+    }
+    $("chkAll").disabled = isBusy;
+  }
+
+  async function apiJson(url, opts={}) {
+    const r = await fetch(url, {
+      headers: { "Content-Type":"application/json", ...(opts.headers||{}) },
+      ...opts
+    });
+    if (!r.ok) {
+      let detail = "";
+      try { detail = (await r.json())?.detail ?? ""; } catch (_) {}
+      throw new Error(`HTTP ${r.status} ${r.statusText}${detail ? " - " + detail : ""}`);
+    }
+    return r.json();
+  }
+
+  function getQueryString() {
+    const params = new URLSearchParams();
+    const search = $("qSearch").value.trim();
+    const mt = $("qMediaType").value.trim();
+    const author = $("qAuthor").value.trim();
+    const platform = $("qPlatform").value.trim();
+
+    if (search) params.set("search", search);
+    if (mt) params.set("media_type", mt);
+    if (author) params.set("author", author);
+    if (platform) params.set("platform", platform);
+
+    const qs = params.toString();
+    return qs ? `?${qs}` : "";
+  }
+
+  function normalizeInt(v) {
+    if (v === null || v === undefined) return null;
+    const s = String(v).trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+  }
+
+  function renderTable() {
+    const tbody = $("tbl").querySelector("tbody");
+    tbody.innerHTML = "";
+
+    for (const row of loaded) {
+      const tr = document.createElement("tr");
+
+      const id = Number(row.id);
+      const isSel = selected.has(id);
+
+      const tdChk = document.createElement("td");
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.checked = isSel;
+      chk.addEventListener("change", () => {
+        if (chk.checked) selected.add(id);
+        else selected.delete(id);
+        updateCounts();
+      });
+      tdChk.appendChild(chk);
+      tr.appendChild(tdChk);
+
+      const cells = [
+        row.id,
+        row.barcode ?? "",
+        row.title ?? "",
+        row.media_type ?? "",
+        row.author ?? "",
+        row.platform ?? "",
+        row.format ?? "",
+        row.location ?? "",
+        row.status ?? "",
+        row.release_year ?? ""
+      ];
+
+      for (const val of cells) {
+        const td = document.createElement("td");
+        td.textContent = val === null || val === undefined ? "" : String(val);
+        tr.appendChild(td);
+      }
+
+      tbody.appendChild(tr);
+    }
+
+    $("chkAll").checked = loaded.length > 0 && selected.size === loaded.length;
+    updateCounts();
+  }
+
+  function updateCounts() {
+    $("loadedCount").textContent = String(loaded.length);
+    $("selectedCount").textContent = String(selected.size);
+  }
+
+  function selectAll() {
+    selected = new Set(loaded.map(r => Number(r.id)));
+    renderTable();
+  }
+  function selectNone() {
+    selected = new Set();
+    renderTable();
+  }
+  function invertSelection() {
+    const next = new Set();
+    for (const r of loaded) {
+      const id = Number(r.id);
+      if (!selected.has(id)) next.add(id);
+    }
+    selected = next;
+    renderTable();
+  }
+
+  function clearUI() {
+    $("qSearch").value = "";
+    $("qMediaType").value = "";
+    $("qAuthor").value = "";
+    $("qPlatform").value = "";
+    loaded = [];
+    selected = new Set();
+    renderTable();
+    $("reportOut").textContent = "";
+    log("Cleared filters and loaded data.", "ok");
+  }
+
+  async function loadMedia() {
+    setBusy(true);
+    try {
+      const qs = getQueryString();
+      log(`Loading /media${qs || ""} ...`);
+      loaded = await apiJson(`/media${qs}`, { method:"GET" });
+      // keep selection only for ids still present
+      const present = new Set(loaded.map(r => Number(r.id)));
+      selected = new Set([...selected].filter(id => present.has(id)));
+      renderTable();
+      log(`Loaded ${loaded.length} rows.`, "ok");
+    } catch (e) {
+      log(String(e), "err");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function buildUpdatePayloadFromInputs() {
+    const payload = {};
+
+    const mt = $("uMediaType").value.trim();
+    const platform = $("uPlatform").value.trim();
+    const format = $("uFormat").value.trim();
+    const location = $("uLocation").value.trim();
+    const status = $("uStatus").value.trim();
+    const year = normalizeInt($("uYear").value);
+    const author = $("uAuthor").value.trim();
+    const notes = $("uNotes").value.trim();
+
+    if (mt) payload.media_type = mt;
+    if (platform) payload.platform = platform;
+    if (format) payload.format = format;
+    if (location) payload.location = location;
+    if (status) payload.status = status;
+    if (year !== null) payload.release_year = year;
+    if (author) payload.author = author;
+    if (notes) payload.notes = notes;
+
+    return payload;
+  }
+
+  async function bulkUpdate() {
+    if (selected.size === 0) {
+      log("No selected rows.", "warn");
+      return;
+    }
+    const payload = buildUpdatePayloadFromInputs();
+    if (Object.keys(payload).length === 0) {
+      log("No fields set for update.", "warn");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const ids = [...selected];
+      log(`Bulk updating ${ids.length} items...`);
+      let ok = 0, fail = 0;
+
+      for (const id of ids) {
+        try {
+          await apiJson(`/media/${id}`, { method:"PUT", body: JSON.stringify(payload) });
+          ok++;
+        } catch (e) {
+          fail++;
+          log(`Update failed for id=${id}: ${String(e)}`, "err");
+        }
+      }
+
+      log(`Bulk update done. ok=${ok} fail=${fail}`, fail ? "warn" : "ok");
+      await loadMedia(); // refresh table
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toCsv(rows) {
+    const cols = [
+      "id","barcode","title","title_raw","media_type","author","platform","format",
+      "location","status","release_year","cover_url","notes","source","added_at","updated_at"
+    ];
+    const esc = (v) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      if (/[",\n]/.test(s)) return `"${s.replaceAll('"','""')}"`;
+      return s;
+    };
+    const header = cols.join(",");
+    const body = rows.map(r => cols.map(c => esc(r[c])).join(",")).join("\n");
+    return header + "\n" + body + "\n";
+  }
+
+  async function exportCsv() {
+    const csv = toCsv(loaded);
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `media_export_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    log(`Exported CSV (${loaded.length} rows).`, "ok");
+  }
+
+  function getPreserveFlags() {
+    return {
+      notes: $("pNotes").checked,
+      platform: $("pPlatform").checked,
+      format: $("pFormat").checked,
+      location: $("pLocation").checked,
+      status: $("pStatus").checked,
+      release_year: $("pYear").checked,
+      author: $("pAuthor").checked
+    };
+  }
+
+  function pickPreservedPayload(row, flags) {
+    const p = {};
+    if (flags.notes && row.notes) p.notes = row.notes;
+    if (flags.platform && row.platform) p.platform = row.platform;
+    if (flags.format && row.format) p.format = row.format;
+    if (flags.location && row.location) p.location = row.location;
+    if (flags.status && row.status) p.status = row.status;
+    if (flags.release_year && row.release_year !== null && row.release_year !== undefined) p.release_year = row.release_year;
+    if (flags.author && row.author) p.author = row.author;
+    return p;
+  }
+
+  async function replaceAndRescanSelected() {
+    if (selected.size === 0) {
+      log("No selected rows.", "warn");
+      return;
+    }
+
+    const flags = getPreserveFlags();
+    const rowsById = new Map(loaded.map(r => [Number(r.id), r]));
+    const ids = [...selected];
+
+    setBusy(true);
+    try {
+      log(`Replace+rescan for ${ids.length} items...`, "warn");
+
+      let ok = 0, fail = 0;
+      for (const id of ids) {
+        const row = rowsById.get(id);
+        if (!row) continue;
+
+        const barcode = String(row.barcode || "").trim();
+        if (!barcode) {
+          fail++;
+          log(`Skip id=${id}: missing barcode`, "err");
+          continue;
+        }
+
+        const preserved = pickPreservedPayload(row, flags);
+
+        try {
+          // 1) delete existing
+          await apiJson(`/media/${id}`, { method:"DELETE" });
+
+          // 2) rescan -> creates new row
+          const scanRes = await apiJson(`/scan`, { method:"POST", body: JSON.stringify({ barcode }) });
+
+          if (scanRes.status !== "added" || !scanRes.item?.id) {
+            throw new Error(`Unexpected scan result: ${scanRes.status}`);
+          }
+
+          // 3) re-apply preserved metadata to new id
+          const newId = Number(scanRes.item.id);
+          if (Object.keys(preserved).length > 0) {
+            await apiJson(`/media/${newId}`, { method:"PUT", body: JSON.stringify(preserved) });
+          }
+
+          ok++;
+          log(`id=${id} replaced -> newId=${newId}`, "ok");
+        } catch (e) {
+          fail++;
+          log(`Replace failed for id=${id}: ${String(e)}`, "err");
+        }
+      }
+
+      log(`Replace+rescan done. ok=${ok} fail=${fail}`, fail ? "warn" : "ok");
+      await loadMedia();
+      selectNone();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function report() {
+    const rows = loaded;
+
+    const countBy = (keyFn) => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = keyFn(r);
+        m.set(k, (m.get(k) || 0) + 1);
+      }
+      return [...m.entries()].sort((a,b) => b[1] - a[1]);
+    };
+
+    const isEmpty = (v) => v === null || v === undefined || String(v).trim() === "";
+
+    const missing = {
+      media_type: rows.filter(r => isEmpty(r.media_type) || r.media_type === "unknown").length,
+      author: rows.filter(r => isEmpty(r.author)).length,
+      platform: rows.filter(r => isEmpty(r.platform)).length,
+      format: rows.filter(r => isEmpty(r.format)).length,
+      location: rows.filter(r => isEmpty(r.location)).length,
+      status: rows.filter(r => isEmpty(r.status)).length,
+      release_year: rows.filter(r => r.release_year === null || r.release_year === undefined).length,
+      cover_url: rows.filter(r => isEmpty(r.cover_url)).length,
+      notes: rows.filter(r => isEmpty(r.notes)).length,
+      source: rows.filter(r => isEmpty(r.source)).length,
+    };
+
+    const lines = [];
+    lines.push(`Loaded rows: ${rows.length}`);
+    lines.push("");
+
+    lines.push("Counts by media_type:");
+    for (const [k,v] of countBy(r => (r.media_type || "null"))) lines.push(`  ${k}: ${v}`);
+    lines.push("");
+
+    lines.push("Counts by platform:");
+    for (const [k,v] of countBy(r => (r.platform || "null"))) lines.push(`  ${k}: ${v}`);
+    lines.push("");
+
+    lines.push("Counts by status:");
+    for (const [k,v] of countBy(r => (r.status || "null"))) lines.push(`  ${k}: ${v}`);
+    lines.push("");
+
+    lines.push("Counts by location:");
+    for (const [k,v] of countBy(r => (r.location || "null"))) lines.push(`  ${k}: ${v}`);
+    lines.push("");
+
+    lines.push("Missing / needs enrichment:");
+    for (const [k,v] of Object.entries(missing)) lines.push(`  ${k}: ${v}`);
+    lines.push("");
+
+    // top recent updated/added (best-effort; timestamps may be null)
+    const byUpdated = [...rows].sort((a,b) => String(b.updated_at||"").localeCompare(String(a.updated_at||"")));
+    lines.push("Top 10 recently updated (by updated_at):");
+    for (const r of byUpdated.slice(0,10)) {
+      lines.push(`  id=${r.id} updated_at=${r.updated_at||""} title=${(r.title||"").slice(0,60)}`);
+    }
+
+    const out = lines.join("\n");
+    $("reportOut").textContent = out;
+    log("Generated report.", "ok");
+  }
+
+  async function copyReport() {
+    const txt = $("reportOut").textContent || "";
+    if (!txt.trim()) {
+      log("No report to copy.", "warn");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(txt);
+      log("Report copied to clipboard.", "ok");
+    } catch (e) {
+      log(`Copy failed: ${String(e)}`, "err");
+    }
+  }
+
+  // wiring
+  $("btnLoad").addEventListener("click", loadMedia);
+  $("btnClear").addEventListener("click", clearUI);
+  $("btnSelectAll").addEventListener("click", selectAll);
+  $("btnSelectNone").addEventListener("click", selectNone);
+  $("btnInvertSel").addEventListener("click", invertSelection);
+  $("btnExportCsv").addEventListener("click", exportCsv);
+  $("btnBulkUpdate").addEventListener("click", bulkUpdate);
+  $("btnReplaceRescan").addEventListener("click", replaceAndRescanSelected);
+  $("btnRefreshLoaded").addEventListener("click", loadMedia);
+  $("btnReport").addEventListener("click", report);
+  $("btnCopyReport").addEventListener("click", copyReport);
+
+  $("chkAll").addEventListener("change", (e) => {
+    if (e.target.checked) selectAll();
+    else selectNone();
+  });
+
+  // default load
+  loadMedia();
+</script>
+</body>
+</html>

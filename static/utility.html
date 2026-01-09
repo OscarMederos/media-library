@@ -33,6 +33,33 @@
     .legend { margin-top:.4rem; display:flex; gap:.5rem; flex-wrap:wrap; }
     .legendItem { display:flex; gap:.35rem; align-items:center; font-size:.85rem; color:var(--muted); }
     .dot { width:.6rem; height:.6rem; border-radius:999px; background:#888; display:inline-block; }
+
+    #chartMediaTypeWrap {
+      height: 320px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #chartMediaType {
+      max-width: 560px !important;
+      max-height: 100% !important;
+      margin: 0 auto;
+    }
+
+    #legendMediaType {
+      justify-content: center;
+      gap: .9rem;
+      margin-top: 1.5rem;
+      padding: 0 .25rem;
+      padding-bottom: 1rem;
+    }
+
+    #legendMediaType .legendItem {
+      justify-content: center;
+      min-width: 140px;
+    }
+
     table { width:100%; border-collapse:collapse; margin-top:.6rem; overflow:hidden; border-radius:12px; }
     th, td { border-bottom:1px solid var(--line); padding:.45rem .5rem; text-align:left; vertical-align:top; }
     th { color:var(--muted); font-weight:600; font-size:.85rem; background:#141414; position:sticky; top:0; z-index:1; }

@@ -333,7 +333,7 @@
       const omdb = getOmdb(item);
       const dir = (omdb && typeof omdb.Director === "string") ? omdb.Director.trim() : "";
       if (!dir || dir.toUpperCase() === "N/A") return "";
-      return ` • Dir: ${dir}`;
+      return ` • ${dir}`;
     }
 
     function shouldShowEnrich(item) {

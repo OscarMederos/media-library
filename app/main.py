@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -13,6 +15,13 @@ from pydantic import BaseModel
 
 DB_PATH = os.getenv("DB_PATH", "/data/media.db")
 BARCODELOOKUP_API_KEY = os.getenv("BARCODELOOKUP_API_KEY")
+
+OMDB_API_KEY = os.getenv("OMDB_API_KEY")
+OMDB_BASE_URL = os.getenv("OMDB_BASE_URL", "https://www.omdbapi.com/")
+
+logger = logging.getLogger("media-library")
+if not logger.handlers:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 app = FastAPI()
 
@@ -29,6 +38,16 @@ def get_db() -> sqlite3.Connection:
 def _ensure_column(db: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     cols = [r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]
     if column not in cols:
+        db.execute(ddl)
+        db.commit()
+
+
+def _ensure_index(db: sqlite3.Connection, index_name: str, ddl: str) -> None:
+    exists = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+        (index_name,),
+    ).fetchone()
+    if not exists:
         db.execute(ddl)
         db.commit()
 
@@ -60,6 +79,12 @@ def init_db() -> None:
             source TEXT,
             source_payload TEXT,
 
+            omdb_imdb_id TEXT,
+            omdb_status TEXT,
+            omdb_last_fetched_at DATETIME,
+            omdb_raw_json TEXT,
+            omdb_hash TEXT,
+
             added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME
         )
@@ -82,6 +107,15 @@ def init_db() -> None:
     _ensure_column(db, "media", "source_payload", "ALTER TABLE media ADD COLUMN source_payload TEXT")
     _ensure_column(db, "media", "updated_at", "ALTER TABLE media ADD COLUMN updated_at DATETIME")
 
+    _ensure_column(db, "media", "omdb_imdb_id", "ALTER TABLE media ADD COLUMN omdb_imdb_id TEXT")
+    _ensure_column(db, "media", "omdb_status", "ALTER TABLE media ADD COLUMN omdb_status TEXT")
+    _ensure_column(db, "media", "omdb_last_fetched_at", "ALTER TABLE media ADD COLUMN omdb_last_fetched_at DATETIME")
+    _ensure_column(db, "media", "omdb_raw_json", "ALTER TABLE media ADD COLUMN omdb_raw_json TEXT")
+    _ensure_column(db, "media", "omdb_hash", "ALTER TABLE media ADD COLUMN omdb_hash TEXT")
+
+    _ensure_index(db, "idx_media_omdb_imdb_id", "CREATE INDEX idx_media_omdb_imdb_id ON media(omdb_imdb_id)")
+    _ensure_index(db, "idx_media_omdb_status", "CREATE INDEX idx_media_omdb_status ON media(omdb_status)")
+
     db.close()
 
 
@@ -94,6 +128,7 @@ SELECT
   author, platform, format, location, status, release_year, cover_url,
   notes,
   source, source_payload,
+  omdb_imdb_id, omdb_status, omdb_last_fetched_at, omdb_raw_json, omdb_hash,
   added_at, updated_at
 FROM media
 """
@@ -321,6 +356,50 @@ def lookup_metadata(code_digits: str) -> tuple[str, str, str, str | None, str, s
 
 
 # -----------------------------
+# OMDb helpers
+# -----------------------------
+def _sha256_json(data: dict[str, Any]) -> str:
+    payload = json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _is_blank(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and not v.strip())
+
+
+def omdb_fetch_movie(*, imdb_id: str | None, title: str | None, year: int | None) -> dict[str, Any]:
+    if not OMDB_API_KEY:
+        raise HTTPException(status_code=500, detail="OMDB_API_KEY not set")
+
+    params: dict[str, Any] = {"apikey": OMDB_API_KEY, "type": "movie", "r": "json", "plot": "short"}
+
+    if imdb_id:
+        params["i"] = imdb_id
+    else:
+        if not title or not title.strip():
+            raise HTTPException(status_code=400, detail="No title available for OMDb lookup")
+        params["t"] = title.strip()
+        if year:
+            params["y"] = int(year)
+
+    try:
+        r = requests.get(
+            OMDB_BASE_URL,
+            params=params,
+            timeout=10,
+            headers={"User-Agent": "media-library/1.0"},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"OMDb request failed: {e}")
+
+    if not r.ok:
+        raise HTTPException(status_code=502, detail=f"OMDb HTTP {r.status_code}")
+
+    data = r.json() or {}
+    return data
+
+
+# -----------------------------
 # Endpoints
 # -----------------------------
 @app.post("/scan")
@@ -370,7 +449,9 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
         "status": "added",
         "input_barcode": input_barcode,
         "normalized_barcode": normalized,
-        "item": dict(row) if row else {"id": new_id, "barcode": normalized, "title": title, "media_type": media_type, "author": author},
+        "item": dict(row)
+        if row
+        else {"id": new_id, "barcode": normalized, "title": title, "media_type": media_type, "author": author},
         "lookup": json.loads(lookup_debug) | {"t_ms_total": int((time.time() - t0) * 1000)},
         "db": {"inserted": True, "id": new_id},
     }
@@ -480,28 +561,107 @@ def delete_media(item_id: int) -> dict[str, Any]:
     return {"status": "deleted", "id": item_id}
 
 
+@app.post("/media/{item_id}/enrich")
+def enrich_media_movie(item_id: int, force: bool = Query(False)) -> dict[str, Any]:
+    db = get_db()
+    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    item = dict(row)
+    media_type = (item.get("media_type") or "").strip().lower()
+
+    if media_type != "movie":
+        return {"status": "skipped", "reason": "not_movie", "item": item}
+
+    if not force and item.get("omdb_status") == "ok" and item.get("omdb_raw_json"):
+        return {"status": "skipped", "reason": "already_ok", "item": item}
+
+    imdb_id = (item.get("omdb_imdb_id") or "").strip() or None
+    title = (item.get("title_raw") or item.get("title") or "").strip() or None
+    year = item.get("release_year")
+    try:
+        year_i = int(year) if year is not None else None
+    except Exception:
+        year_i = None
+
+    data = omdb_fetch_movie(imdb_id=imdb_id, title=title, year=year_i)
+
+    status = "error"
+    if str(data.get("Response", "")).lower() == "true":
+        status = "ok"
+    else:
+        err = (data.get("Error") or "").strip().lower()
+        status = "not_found" if "not found" in err else "error"
+
+    omdb_hash = _sha256_json(data)
+    new_imdb = (data.get("imdbID") or "").strip() or imdb_id
+
+    fields: list[str] = [
+        "omdb_status = ?",
+        "omdb_last_fetched_at = CURRENT_TIMESTAMP",
+        "omdb_raw_json = ?",
+        "omdb_hash = ?",
+    ]
+    params: list[Any] = [status, json.dumps(data), omdb_hash]
+
+    if new_imdb:
+        fields.append("omdb_imdb_id = ?")
+        params.append(new_imdb)
+
+    # Fill-blanks-only policy for selected display fields
+    if status == "ok":
+        if item.get("release_year") is None:
+            y = (data.get("Year") or "").strip()
+            try:
+                y_i = int(y[:4]) if y else None
+            except Exception:
+                y_i = None
+            if y_i:
+                fields.append("release_year = ?")
+                params.append(y_i)
+
+        if _is_blank(item.get("cover_url")):
+            poster = (data.get("Poster") or "").strip()
+            if poster and poster.upper() != "N/A":
+                fields.append("cover_url = ?")
+                params.append(poster)
+
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+
+    query = f"UPDATE media SET {', '.join(fields)} WHERE id = ?"
+    params.append(item_id)
+
+    db.execute(query, params)
+    db.commit()
+
+    updated = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    if status != "ok":
+        logger.info("OMDb enrich item_id=%s status=%s title=%r imdb_id=%r", item_id, status, title, new_imdb)
+
+    return {"status": "enriched", "omdb_status": status, "item": dict(updated) if updated else {"id": item_id}}
+
 
 # -----------------------------
 # Reporting endpoints
 # -----------------------------
 def _media_type_sql_values(media_type: str) -> tuple[str, list[str]]:
-    mt = (media_type or '').strip().lower()
-    if mt in ('game', 'games', 'video_game'):
-        return "(COALESCE(media_type,'unknown') IN (?, ?))", ['game', 'video_game']
+    mt = (media_type or "").strip().lower()
+    if mt in ("game", "games", "video_game"):
+        return "(COALESCE(media_type,'unknown') IN (?, ?))", ["game", "video_game"]
     return "(COALESCE(media_type,'unknown') = ?)", [mt]
 
 
-@app.get('/reports/summary')
+@app.get("/reports/summary")
 def report_summary() -> dict[str, Any]:
     db = get_db()
-    # media type counts
     mt_rows = db.execute(
         "SELECT COALESCE(media_type,'unknown') AS k, COUNT(*) AS n "
         "FROM media "
         "GROUP BY COALESCE(media_type,'unknown') "
         "ORDER BY n DESC"
     ).fetchall()
-    media_type_counts = [{'media_type': r['k'], 'count': r['n']} for r in mt_rows]
+    media_type_counts = [{"media_type": r["k"], "count": r["n"]} for r in mt_rows]
 
     dup_rows = db.execute(
         "SELECT barcode, COUNT(*) AS n "
@@ -514,36 +674,36 @@ def report_summary() -> dict[str, Any]:
 
     empty_titles = db.execute(
         "SELECT COUNT(*) AS n FROM media WHERE title IS NULL OR TRIM(title) = ''"
-    ).fetchone()['n']
+    ).fetchone()["n"]
 
     unknown_media_type = db.execute(
         "SELECT COUNT(*) AS n "
         "FROM media "
         "WHERE media_type IS NULL OR TRIM(media_type) = '' OR LOWER(TRIM(media_type)) = 'unknown'"
-    ).fetchone()['n']
+    ).fetchone()["n"]
 
     missing_cover_url = db.execute(
         "SELECT COUNT(*) AS n FROM media WHERE cover_url IS NULL OR TRIM(cover_url) = ''"
-    ).fetchone()['n']
+    ).fetchone()["n"]
 
     return {
-        'media_type_counts': media_type_counts,
-        'data_quality': {
-            'duplicate_barcodes': duplicate_barcodes,
-            'empty_titles': empty_titles,
-            'unknown_media_type': unknown_media_type,
-            'missing_cover_url': missing_cover_url,
+        "media_type_counts": media_type_counts,
+        "data_quality": {
+            "duplicate_barcodes": duplicate_barcodes,
+            "empty_titles": empty_titles,
+            "unknown_media_type": unknown_media_type,
+            "missing_cover_url": missing_cover_url,
         },
     }
 
 
-@app.get('/reports/missing')
+@app.get("/reports/missing")
 def report_missing(
-    media_type: str = Query(..., description='book | movie | game | video_game'),
-    field: str = Query(..., description='author | platform | format | cover_url'),
+    media_type: str = Query(..., description="book | movie | game | video_game"),
+    field: str = Query(..., description="author | platform | format | cover_url"),
     limit: int = Query(25, ge=1, le=500),
 ) -> list[dict[str, Any]]:
-    allowed_fields = {'author', 'platform', 'format', 'cover_url'}
+    allowed_fields = {"author", "platform", "format", "cover_url"}
     if field not in allowed_fields:
         raise HTTPException(status_code=400, detail=f"field must be one of: {sorted(allowed_fields)}")
 
@@ -560,6 +720,8 @@ def report_missing(
     params: list[Any] = [*mt_params, limit]
     rows = db.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
+
+
 # -----------------------------
 # Static UI at /ui
 # -----------------------------

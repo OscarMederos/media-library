@@ -311,12 +311,35 @@
       });
     }
 
+    function safeParseJson(raw) {
+      if (!raw) return null;
+      if (typeof raw === "object") return raw;
+      if (typeof raw !== "string") return null;
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+
+    function getOmdb(item) {
+      // cache parsed OMDb JSON on the item to avoid repeated JSON.parse
+      if (!item) return null;
+      if (item._omdbParsed !== undefined) return item._omdbParsed;
+      const parsed = safeParseJson(item.omdb_raw_json);
+      item._omdbParsed = parsed || null;
+      return item._omdbParsed;
+    }
+
+    function getDirectorDisplay(item) {
+      const mt = norm(item.media_type || "unknown");
+      if (mt !== "movie") return "";
+      const omdb = getOmdb(item);
+      const dir = (omdb && typeof omdb.Director === "string") ? omdb.Director.trim() : "";
+      if (!dir || dir.toUpperCase() === "N/A") return "";
+      return ` • Dir: ${dir}`;
+    }
+
     function shouldShowEnrich(item) {
       const mt = norm(item.media_type || "unknown");
       if (mt !== "movie") return false;
-
       const status = norm(item.omdb_status || "");
-      // show when missing/needs retry
       return status !== "ok";
     }
 
@@ -332,7 +355,7 @@
         const resp = await fetch(`/media/${id}/enrich`, { method: "POST" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
 
-        // Prefer network refresh to update poster/year/etc immediately
+        // Prefer network refresh to update director/year/poster/etc immediately
         await load({ preferNetwork: true });
       } catch (e) {
         alert("Enrich failed: " + e);
@@ -362,6 +385,7 @@
         const st = item.status ? ` • ${item.status}` : "";
         const yr = item.release_year ? ` • ${item.release_year}` : "";
         const fmtStr = item.format ? ` • ${item.format}` : "";
+        const director = getDirectorDisplay(item);
 
         const enrichHtml = shouldShowEnrich(item)
           ? `<button class="enrich" data-id="${item.id}">Enrich</button>`
@@ -369,7 +393,7 @@
 
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
-          <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
+          <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}${escapeHtml(director)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
             <button class="edit">Edit</button>
@@ -424,6 +448,7 @@
 
       try {
         const items = await fetchMediaNetwork();
+        // clear any cached _omdbParsed fields since these are fresh objects
         currentItems = items;
         saveCache(items);
         rerender();

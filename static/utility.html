@@ -25,7 +25,6 @@
     @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
     .log { white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; background:#0c0c0c; border:1px solid var(--line); border-radius:12px; padding:.75rem; max-height:240px; overflow:auto; margin-top:.75rem; }
 
-
     .chartTile { margin:0; display:block; }
     .chartBox { height:240px; margin-top:.35rem; }
     .chartBox canvas { width:100% !important; height:100% !important; display:block; }
@@ -42,7 +41,6 @@
     }
 
     #chartMediaType {
-    /*  max-width: 560px !important; */
       max-height: 100% !important;
       margin: 0 auto;
     }
@@ -64,7 +62,6 @@
     th, td { border-bottom:1px solid var(--line); padding:.45rem .5rem; text-align:left; vertical-align:top; }
     th { color:var(--muted); font-weight:600; font-size:.85rem; background:#141414; position:sticky; top:0; z-index:1; }
     tr:hover td { background:#141414; }
-    .tableWrap { max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:12px; margin-top:.6rem; }
     .small { font-size:.85rem; color:var(--muted); }
     .hint { font-size:.9rem; color:var(--muted); margin-top:.35rem; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
@@ -166,6 +163,28 @@
           </table>
         </div>
       </div>
+
+      <!-- NEW: Movies missing OMDb tile/table -->
+      <div class="panel chartTile">
+        <div class="chartHeader">
+          <div class="chartTitle">Movies missing OMDb</div>
+          <div id="kpiMoviesMissingOmdb" class="chartKpi"></div>
+        </div>
+        <div class="chartBox"><canvas id="chartMoviesMissingOmdb"></canvas></div>
+        <div id="legendMoviesMissingOmdb" class="legend"></div>
+
+        <div class="row" style="margin-top:.5rem;">
+          <div class="small">First <span id="moviesOmdbN" class="pill">25</span> missing</div>
+          <div class="spacer"></div>
+          <button id="btnCopyMoviesOmdbCsv">Copy CSV</button>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>ID</th><th>Barcode</th><th>Title</th></tr></thead>
+            <tbody id="tblMoviesMissingOmdb"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <div class="panel" style="margin-top:.75rem;">
@@ -196,6 +215,7 @@
       booksMissingAuthor: [],
       gamesMissingPlatform: [],
       moviesMissingFormat: [],
+      moviesMissingOmdb: [],
       dupes: [],
     };
 
@@ -204,6 +224,7 @@
       booksMissingAuthor: null,
       gamesMissingPlatform: null,
       moviesMissingFormat: null,
+      moviesMissingOmdb: null,
     };
 
     function log(line, cls="muted") {
@@ -216,7 +237,7 @@
     }
 
     function setBusy(isBusy) {
-      for (const id of ["btnLoad","btnReport","btnExportPng","btnCopyBooksCsv","btnCopyGamesCsv","btnCopyMoviesCsv","btnCopyDupesCsv"]) {
+      for (const id of ["btnLoad","btnReport","btnExportPng","btnCopyBooksCsv","btnCopyGamesCsv","btnCopyMoviesCsv","btnCopyMoviesOmdbCsv","btnCopyDupesCsv"]) {
         $(id).disabled = isBusy;
       }
       $("scopeSel").disabled = isBusy;
@@ -294,6 +315,7 @@
       charts.booksMissingAuthor = destroyChart(charts.booksMissingAuthor);
       charts.gamesMissingPlatform = destroyChart(charts.gamesMissingPlatform);
       charts.moviesMissingFormat = destroyChart(charts.moviesMissingFormat);
+      charts.moviesMissingOmdb = destroyChart(charts.moviesMissingOmdb);
     }
 
     function recreateCanvas(canvasId) {
@@ -532,6 +554,27 @@
       lastOffenders.moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).slice(0, OFFENDER_LIMIT);
       renderOffenders("tblMoviesMissingFormat", lastOffenders.moviesMissingFormat);
 
+      // 5) movies missing OMDb (not enriched or failed)
+      const moviesMissingOmdbRows = movieRows.filter(r => {
+        const status = String(r.omdb_status || "").trim().toLowerCase();
+        return isEmpty(r.omdb_raw_json) || status !== "ok";
+      });
+      const moviesMissingOmdb = moviesMissingOmdbRows.length;
+      const moviesHasOmdb = Math.max(0, movieRows.length - moviesMissingOmdb);
+      charts.moviesMissingOmdb = buildDoughnut(
+        "chartMoviesMissingOmdb",
+        ["has OMDb", "missing OMDb"],
+        [moviesHasOmdb, moviesMissingOmdb],
+        "Movies missing OMDb"
+      );
+      setKpi("kpiMoviesMissingOmdb", `(${moviesMissingOmdb}/${movieRows.length})`);
+      setLegend("legendMoviesMissingOmdb", [
+        `has OMDb: ${moviesHasOmdb} (${pct(moviesHasOmdb, movieRows.length)})`,
+        `missing OMDb: ${moviesMissingOmdb} (${pct(moviesMissingOmdb, movieRows.length)})`,
+      ]);
+      lastOffenders.moviesMissingOmdb = moviesMissingOmdbRows.slice(0, OFFENDER_LIMIT);
+      renderOffenders("tblMoviesMissingOmdb", lastOffenders.moviesMissingOmdb);
+
       log("Generated charts + actionable tables.", "ok");
     }
 
@@ -546,6 +589,7 @@
         ["chartBooksMissingAuthor", "books_missing_author"],
         ["chartGamesMissingPlatform", "games_missing_platform"],
         ["chartMoviesMissingFormat", "movies_missing_format"],
+        ["chartMoviesMissingOmdb", "movies_missing_omdb"],
       ];
 
       const stamp = new Date().toISOString().slice(0,10);
@@ -585,7 +629,7 @@
     $("scopeSel").addEventListener("change", () => {
       applyScopeAndRefresh();
       // If charts already exist, refresh them so scope changes are visible.
-      if (charts.mediaType || charts.booksMissingAuthor || charts.gamesMissingPlatform || charts.moviesMissingFormat) {
+      if (charts.mediaType || charts.booksMissingAuthor || charts.gamesMissingPlatform || charts.moviesMissingFormat || charts.moviesMissingOmdb) {
         generateCharts();
       }
     });
@@ -593,6 +637,7 @@
     $("btnCopyBooksCsv").addEventListener("click", () => copyOffendersCsv("booksMissingAuthor"));
     $("btnCopyGamesCsv").addEventListener("click", () => copyOffendersCsv("gamesMissingPlatform"));
     $("btnCopyMoviesCsv").addEventListener("click", () => copyOffendersCsv("moviesMissingFormat"));
+    $("btnCopyMoviesOmdbCsv").addEventListener("click", () => copyOffendersCsv("moviesMissingOmdb"));
     $("btnCopyDupesCsv").addEventListener("click", copyDupesCsv);
 
     // Auto-load once

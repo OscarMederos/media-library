@@ -24,6 +24,8 @@
     .actions { display:flex; gap:.5rem; flex-wrap: wrap; }
     .actions button { font-size:.95rem; padding:.5rem .75rem; }
     .edit { background:#ffb300; color:#000; }
+    .enrich { background:#7e57c2; color:#fff; }
+    .enrich[disabled] { opacity: .7; }
     .del { background:#ef5350; color:#fff; }
 
     .empty { color:#777; text-align:center; margin-top:2rem; }
@@ -302,13 +304,44 @@
             if (!norm(item.author).includes(extra)) return false;
           } else if (t === "game") {
             if (!norm(item.platform).includes(extra)) return false;
-          } else {
-            // if user somehow shows it, ignore
           }
         }
 
         return true;
       });
+    }
+
+    function shouldShowEnrich(item) {
+      const mt = norm(item.media_type || "unknown");
+      if (mt !== "movie") return false;
+
+      const status = norm(item.omdb_status || "");
+      // show when missing/needs retry
+      return status !== "ok";
+    }
+
+    async function doEnrich(id, btn) {
+      const originalText = btn ? btn.textContent : null;
+
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Enriching…";
+        }
+
+        const resp = await fetch(`/media/${id}/enrich`, { method: "POST" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+        // Prefer network refresh to update poster/year/etc immediately
+        await load({ preferNetwork: true });
+      } catch (e) {
+        alert("Enrich failed: " + e);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText || "Enrich";
+        }
+      }
     }
 
     function render(items) {
@@ -330,18 +363,28 @@
         const yr = item.release_year ? ` • ${item.release_year}` : "";
         const fmtStr = item.format ? ` • ${item.format}` : "";
 
+        const enrichHtml = shouldShowEnrich(item)
+          ? `<button class="enrich" data-id="${item.id}">Enrich</button>`
+          : "";
+
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
           <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
             <button class="edit">Edit</button>
+            ${enrichHtml}
             <button class="del">Delete</button>
           </div>
         `;
 
         div.querySelector(".edit").addEventListener("click", () => openEdit(item.id));
         div.querySelector(".del").addEventListener("click", () => doDelete(item.id));
+
+        const enrichBtn = div.querySelector(".enrich");
+        if (enrichBtn) {
+          enrichBtn.addEventListener("click", () => doEnrich(item.id, enrichBtn));
+        }
 
         listEl.appendChild(div);
       }

@@ -13,17 +13,26 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from igdb_enrich import IgdbClient, IgdbConfig, enrich_media_game_from_igdb, ensure_igdb_columns
+
 DB_PATH = os.getenv("DB_PATH", "/data/media.db")
 BARCODELOOKUP_API_KEY = os.getenv("BARCODELOOKUP_API_KEY")
 
 OMDB_API_KEY = os.getenv("OMDB_API_KEY")
 OMDB_BASE_URL = os.getenv("OMDB_BASE_URL", "https://www.omdbapi.com/")
 
+IGDB_CLIENT_ID = os.getenv("IGDB_CLIENT_ID", "").strip()
+IGDB_CLIENT_SECRET = os.getenv("IGDB_CLIENT_SECRET", "").strip()
+
 logger = logging.getLogger("media-library")
 if not logger.handlers:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 app = FastAPI()
+
+igdb_client: IgdbClient | None = None
+if IGDB_CLIENT_ID and IGDB_CLIENT_SECRET:
+    igdb_client = IgdbClient(IgdbConfig(client_id=IGDB_CLIENT_ID, client_secret=IGDB_CLIENT_SECRET))
 
 
 # -----------------------------
@@ -116,6 +125,10 @@ def init_db() -> None:
     _ensure_index(db, "idx_media_omdb_imdb_id", "CREATE INDEX idx_media_omdb_imdb_id ON media(omdb_imdb_id)")
     _ensure_index(db, "idx_media_omdb_status", "CREATE INDEX idx_media_omdb_status ON media(omdb_status)")
 
+    # IGDB auto-migration
+    ensure_igdb_columns(db)
+    db.commit()
+
     db.close()
 
 
@@ -126,9 +139,11 @@ SELECT
   id, barcode,
   title, title_raw, media_type,
   author, platform, format, location, status, release_year, cover_url,
+  developer,
   notes,
   source, source_payload,
   omdb_imdb_id, omdb_status, omdb_last_fetched_at, omdb_raw_json, omdb_hash,
+  igdb_game_id, igdb_cover_image_id, igdb_last_enriched_at,
   added_at, updated_at
 FROM media
 """
@@ -154,6 +169,7 @@ class MediaUpdate(BaseModel):
     status: str | None = None
     release_year: int | None = None
     cover_url: str | None = None
+    developer: str | None = None
 
     notes: str | None = None
 
@@ -245,7 +261,7 @@ def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, str | None, dict[str
             except Exception:
                 continue
 
-        author = _join_authors(author_names)
+        author = ", ".join([n for n in author_names if n]) or None
         meta["picked"] = {"title": title, "author": author}
         return title, author, meta
     except Exception as e:
@@ -254,93 +270,97 @@ def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, str | None, dict[str
         return None, None, meta
 
 
-def lookup_upc_barcodelookup(code: str) -> tuple[str | None, str, dict[str, Any], dict[str, Any] | None]:
+def lookup_upc_barcodelookup(upc: str) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
     """
-    Returns: (title, inferred_media_type, meta, payload_snippet)
+    Returns: (title, inferred_media_type, cover_url, meta)
     """
-    meta: dict[str, Any] = {"path": "upc/ean", "provider": "barcodelookup"}
+    meta: dict[str, Any] = {"path": "upc", "provider": "barcodelookup"}
     if not BARCODELOOKUP_API_KEY:
-        meta["http_status"] = None
         meta["message"] = "BARCODELOOKUP_API_KEY not set"
-        return None, "unknown", meta, None
+        return None, None, None, meta
 
     try:
         r = requests.get(
             "https://api.barcodelookup.com/v3/products",
-            params={"barcode": code, "formatted": "y", "key": BARCODELOOKUP_API_KEY},
+            params={"barcode": upc, "formatted": "y", "key": BARCODELOOKUP_API_KEY},
             timeout=10,
             headers={"User-Agent": "media-library/1.0"},
         )
         meta["http_status"] = r.status_code
         if not r.ok:
             meta["message"] = f"HTTP {r.status_code}"
-            return None, "unknown", meta, None
+            return None, None, None, meta
 
         data = r.json() or {}
         products = data.get("products") or []
         if not products:
             meta["message"] = "No products"
-            return None, "unknown", meta, None
+            return None, None, None, meta
 
         p0 = products[0] or {}
-        title = p0.get("product_name") or p0.get("title") or p0.get("description")
-        category = (p0.get("category") or "").lower()
-        meta["picked"] = {"title": title, "category": p0.get("category")}
+        title = (p0.get("title") or "").strip() or None
 
+        # Attempt to infer media_type from category or title
+        cat = (p0.get("category") or "").lower()
         inferred = "unknown"
-        if "book" in category:
+        if "book" in cat:
             inferred = "book"
-        elif "video game" in category or "game" in category:
-            inferred = "game"
-        elif "dvd" in category or "blu-ray" in category or "movie" in category:
+        elif "movie" in cat or "dvd" in cat or "blu-ray" in cat:
             inferred = "movie"
+        elif "game" in cat or "playstation" in cat or "xbox" in cat or "nintendo" in cat:
+            inferred = "game"
 
-        payload_snippet = {
-            "product_name": p0.get("product_name"),
-            "title": p0.get("title"),
-            "category": p0.get("category"),
-            "brand": p0.get("brand"),
-            "manufacturer": p0.get("manufacturer"),
-            "images": p0.get("images"),
-        }
-        return title, inferred, meta, payload_snippet
+        images = p0.get("images") or []
+        cover_url = images[0] if images and isinstance(images[0], str) else None
+
+        meta["picked"] = {"title": title, "category": p0.get("category"), "cover_url": cover_url}
+        return title, inferred, cover_url, meta
     except Exception as e:
         meta["http_status"] = None
         meta["message"] = str(e)
-        return None, "unknown", meta, None
+        return None, None, None, meta
 
 
-def lookup_metadata(code_digits: str) -> tuple[str, str, str, str | None, str, str | None]:
+def lookup_metadata(barcode: str) -> tuple[str, str, str, str | None, str, str | None]:
     """
-    Returns:
-      title, media_type, source, source_payload_json, lookup_debug_json, author
+    Returns: (title, media_type, source, source_payload_json, lookup_debug_json, author)
     """
-    is_isbn10 = len(code_digits) == 10
-    is_isbn13 = len(code_digits) == 13 and code_digits.startswith(("978", "979"))
-    is_upc = len(code_digits) == 12
-    is_ean13_non_isbn = len(code_digits) == 13 and not is_isbn13
+    normalized = normalize_barcode(barcode)
 
-    # Books (ISBN)
-    if is_isbn10 or is_isbn13:
-        t0 = time.time()
-
-        title, author, meta1 = lookup_isbn_google(code_digits)
+    # ISBN-10/13 for books
+    if len(normalized) in (10, 13) and normalized.startswith(("978", "979", "0", "1")):
+        title, author, meta = lookup_isbn_google(normalized)
         if title:
-            meta1["t_ms"] = int((time.time() - t0) * 1000)
-            return title, "book", "google_books", None, json.dumps(meta1), author
+            return (
+                title,
+                "book",
+                "google_books",
+                json.dumps({"title": title, "author": author}),
+                json.dumps(meta),
+                author,
+            )
 
-        title2, author2, meta2 = lookup_isbn_openlibrary(code_digits)
-        meta2["t_ms"] = int((time.time() - t0) * 1000)
-        if title2:
-            return title2, "book", "openlibrary", None, json.dumps(meta2), author2
+        title, author, meta2 = lookup_isbn_openlibrary(normalized)
+        if title:
+            return (
+                title,
+                "book",
+                "openlibrary",
+                json.dumps({"title": title, "author": author}),
+                json.dumps(meta2),
+                author,
+            )
 
-        # Fall back to unknown title but mark type as book (still an ISBN)
-        meta2["message"] = meta2.get("message") or "No title found"
-        return "Unknown Book", "book", "none", None, json.dumps(meta2), None
+        meta3 = {"path": "isbn", "provider": "none", "message": "No ISBN match"}
+        return "Unknown Book", "book", "none", None, json.dumps(meta3), None
 
-    # UPC/EAN for movies/games/unknown
-    if is_upc or is_ean13_non_isbn:
-        title, inferred, meta, payload = lookup_upc_barcodelookup(code_digits)
+    # UPC/EAN for general items (movies/games/etc)
+    if len(normalized) in (12, 13):
+        title, inferred, cover_url, meta = lookup_upc_barcodelookup(normalized)
+        payload: dict[str, Any] | None = None
+        if title or cover_url:
+            payload = {"title": title, "cover_url": cover_url}
+
         return (
             title or "Unknown Item",
             inferred,
@@ -446,46 +466,33 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (new_id,)).fetchone()
 
     return {
-        "status": "added",
+        "status": "inserted",
         "input_barcode": input_barcode,
         "normalized_barcode": normalized,
-        "item": dict(row)
-        if row
-        else {"id": new_id, "barcode": normalized, "title": title, "media_type": media_type, "author": author},
-        "lookup": json.loads(lookup_debug) | {"t_ms_total": int((time.time() - t0) * 1000)},
-        "db": {"inserted": True, "id": new_id},
+        "item": dict(row) if row else {"id": new_id},
+        "lookup": json.loads(lookup_debug) if lookup_debug else None,
+        "timing_ms": int((time.time() - t0) * 1000),
     }
 
 
 @app.get("/media")
 def list_media(
-    media_type: str | None = None,
-    search: str | None = None,
-    author: str | None = None,
-    platform: str | None = None,
+    q: str | None = Query(None, description="Search title/barcode"),
+    limit: int = Query(500, ge=1, le=5000),
 ) -> list[dict[str, Any]]:
     db = get_db()
-    query = MEDIA_SELECT + " WHERE 1=1"
     params: list[Any] = []
+    sql = MEDIA_SELECT
 
-    if media_type:
-        query += " AND COALESCE(media_type,'unknown') = ?"
-        params.append(media_type)
+    if q and q.strip():
+        qn = f"%{q.strip()}%"
+        sql += " WHERE title LIKE ? OR title_raw LIKE ? OR barcode LIKE ?"
+        params.extend([qn, qn, qn])
 
-    if search:
-        query += " AND title LIKE ?"
-        params.append(f"%{search}%")
+    sql += " ORDER BY added_at DESC, id DESC LIMIT ?"
+    params.append(limit)
 
-    if author:
-        query += " AND author LIKE ?"
-        params.append(f"%{author}%")
-
-    if platform:
-        query += " AND platform LIKE ?"
-        params.append(f"%{platform}%")
-
-    query += " ORDER BY added_at DESC, id DESC"
-    rows = db.execute(query, params).fetchall()
+    rows = db.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -498,7 +505,7 @@ def get_media(item_id: int) -> dict[str, Any]:
     return dict(row)
 
 
-@app.put("/media/{item_id}")
+@app.patch("/media/{item_id}")
 def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
     db = get_db()
     exists = db.execute("SELECT id FROM media WHERE id = ?", (item_id,)).fetchone()
@@ -533,17 +540,19 @@ def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
         add("release_year", patch.release_year)
     if patch.cover_url is not None:
         add("cover_url", patch.cover_url)
+    if patch.developer is not None:
+        add("developer", patch.developer)
     if patch.notes is not None:
         add("notes", patch.notes)
 
     if not fields:
-        return {"status": "no_changes", "id": item_id}
+        row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+        return {"status": "noop", "item": dict(row) if row else {"id": item_id}}
 
     fields.append("updated_at = CURRENT_TIMESTAMP")
-    query = f"UPDATE media SET {', '.join(fields)} WHERE id = ?"
     params.append(item_id)
 
-    db.execute(query, params)
+    db.execute(f"UPDATE media SET {', '.join(fields)} WHERE id = ?", params)
     db.commit()
 
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
@@ -635,33 +644,45 @@ def enrich_media_movie(item_id: int, force: bool = Query(False)) -> dict[str, An
     db.execute(query, params)
     db.commit()
 
-    updated = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
-    if status != "ok":
-        logger.info("OMDb enrich item_id=%s status=%s title=%r imdb_id=%r", item_id, status, title, new_imdb)
-
-    return {"status": "enriched", "omdb_status": status, "item": dict(updated) if updated else {"id": item_id}}
+    row2 = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    return {"status": status, "item": dict(row2) if row2 else item}
 
 
-# -----------------------------
-# Reporting endpoints
-# -----------------------------
-def _media_type_sql_values(media_type: str) -> tuple[str, list[str]]:
+@app.post("/media/{item_id}/enrich/igdb")
+def enrich_media_igdb(item_id: int) -> dict[str, Any]:
+    if igdb_client is None:
+        raise HTTPException(status_code=500, detail="IGDB not configured (missing IGDB_CLIENT_ID/IGDB_CLIENT_SECRET)")
+
+    db = get_db()
+    try:
+        return enrich_media_game_from_igdb(db=db, igdb=igdb_client, media_id=item_id, logger=logger)
+    except Exception as e:
+        logger.exception("IGDB enrich failed media_id=%s", item_id)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _media_type_sql_values(media_type: str) -> tuple[str, list[Any]]:
     mt = (media_type or "").strip().lower()
-    if mt in ("game", "games", "video_game"):
-        return "(COALESCE(media_type,'unknown') IN (?, ?))", ["game", "video_game"]
-    return "(COALESCE(media_type,'unknown') = ?)", [mt]
+    if mt in {"book", "books"}:
+        return "LOWER(TRIM(media_type)) = 'book'", []
+    if mt in {"movie", "movies"}:
+        return "LOWER(TRIM(media_type)) = 'movie'", []
+    if mt in {"game", "games", "video_game", "video game", "video games", "videogame", "videogames"}:
+        return "LOWER(TRIM(media_type)) IN ('game', 'video game', 'videogame')", []
+    # fallback: exact match provided
+    return "LOWER(TRIM(media_type)) = ?", [mt]
 
 
 @app.get("/reports/summary")
 def report_summary() -> dict[str, Any]:
     db = get_db()
-    mt_rows = db.execute(
-        "SELECT COALESCE(media_type,'unknown') AS k, COUNT(*) AS n "
-        "FROM media "
-        "GROUP BY COALESCE(media_type,'unknown') "
-        "ORDER BY n DESC"
+
+    rows = db.execute(
+        "SELECT COALESCE(NULLIF(TRIM(media_type), ''), 'unknown') AS mt, COUNT(*) AS n "
+        "FROM media GROUP BY COALESCE(NULLIF(TRIM(media_type), ''), 'unknown') "
+        "ORDER BY n DESC, mt ASC"
     ).fetchall()
-    media_type_counts = [{"media_type": r["k"], "count": r["n"]} for r in mt_rows]
+    media_type_counts = {r["mt"]: r["n"] for r in rows}
 
     dup_rows = db.execute(
         "SELECT barcode, COUNT(*) AS n "

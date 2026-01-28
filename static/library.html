@@ -610,7 +610,7 @@
 
       try {
         const resp = await fetch(`/media/${encodeURIComponent(String(editingItem.id))}`, {
-          method: "PUT",
+          method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch)
         });
@@ -618,7 +618,7 @@
 
         const data = await resp.json();
         const updated = data.item;
-        if (!updated) throw new Error("Unexpected PUT response (missing item).");
+        if (!updated) throw new Error("Unexpected PATCH response (missing item).");
 
         currentItems = currentItems.map(x => idEq(x.id, updated.id) ? updated : x);
         saveCache(currentItems);

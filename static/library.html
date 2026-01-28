@@ -585,23 +585,26 @@
       };
 
       try {
-        const resp = await fetch(`/media/${editingItem.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(patch)
-        });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const resp = await fetch(`/media/${editingItem.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+      title: mTitle.value,
+      title_raw: mTitleRaw.value,
+      media_type: typeVal,
 
-        const data = await resp.json();
-        const updated = data.item;
+      author: (typeVal === "book") ? mAuthor.value : null,
+      developer: (typeVal === "game") ? mDeveloper.value : null,
 
-        currentItems = currentItems.map(x => x.id === updated.id ? updated : x);
-        saveCache(currentItems);
-        rerender();
-        closeEdit();
-      } catch (e) {
-        alert("Update failed: " + e);
-      }
+      platform: mPlatform.value,
+      format: mFormat.value,
+      location: mLocation.value,
+      status: mStatus.value,
+      release_year: yearVal ? parseInt(yearVal, 10) : null,
+      cover_url: mCoverUrl.value,
+      notes: mNotes.value
+      })
+    });
     }
 
     async function doDelete(id) {

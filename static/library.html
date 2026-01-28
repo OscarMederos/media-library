@@ -605,7 +605,7 @@
       notes: mNotes.value
       })
     });
-    }
+    
 
     async function doDelete(id) {
       const item = currentItems.find(x => x.id === id);
@@ -623,7 +623,7 @@
         alert("Delete failed: " + e);
       }
     }
-
+  }
     // Events
     cancelBtn.addEventListener("click", closeEdit);
     saveBtn.addEventListener("click", saveEdit);

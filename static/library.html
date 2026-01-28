@@ -149,6 +149,13 @@
           </div>
         </div>
 
+        <div id="developerRow" class="row2 hidden">
+          <div style="grid-column: 1 / -1;">
+            <label>Developer (games)</label>
+            <input id="mDeveloper" placeholder="e.g., Nintendo, Capcom, Naughty Dog" />
+          </div>
+        </div>
+
         <div class="row3">
           <div>
             <label>Platform / Console (games)</label>
@@ -202,7 +209,7 @@
   </div>
 
   <script>
-    const CACHE_KEY = "mediaLibrary.mediaCache.v3";
+    const CACHE_KEY = "mediaLibrary.mediaCache.v4";
 
     const listEl = document.getElementById("list");
     const searchEl = document.getElementById("search");
@@ -217,7 +224,9 @@
     const mTitleRaw = document.getElementById("mTitleRaw");
     const mType = document.getElementById("mType");
     const authorRow = document.getElementById("authorRow");
+    const developerRow = document.getElementById("developerRow");
     const mAuthor = document.getElementById("mAuthor");
+    const mDeveloper = document.getElementById("mDeveloper");
     const mPlatform = document.getElementById("mPlatform");
     const mFormat = document.getElementById("mFormat");
     const mYear = document.getElementById("mYear");
@@ -267,6 +276,8 @@
     }
 
     function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
+    function norm(s) { return String(s ?? "").toLowerCase().trim(); }
+    function isBlank(v) { return v === null || v === undefined || String(v).trim() === ""; }
 
     function updateExtraUI() {
       const t = filterEl.value;
@@ -275,14 +286,12 @@
         extraEl.placeholder = "Filter by author…";
       } else if (t === "game") {
         extraEl.classList.remove("hidden");
-        extraEl.placeholder = "Filter by platform…";
+        extraEl.placeholder = "Filter by platform / developer…";
       } else {
         extraEl.classList.add("hidden");
         extraEl.value = "";
       }
     }
-
-    function norm(s) { return String(s ?? "").toLowerCase().trim(); }
 
     function applyFilters(items) {
       const t = filterEl.value;
@@ -303,7 +312,9 @@
           if (t === "book") {
             if (!norm(item.author).includes(extra)) return false;
           } else if (t === "game") {
-            if (!norm(item.platform).includes(extra)) return false;
+            const platformOk = norm(item.platform).includes(extra);
+            const devOk = norm(item.developer).includes(extra);
+            if (!platformOk && !devOk) return false;
           }
         }
 
@@ -319,7 +330,6 @@
     }
 
     function getOmdb(item) {
-      // cache parsed OMDb JSON on the item to avoid repeated JSON.parse
       if (!item) return null;
       if (item._omdbParsed !== undefined) return item._omdbParsed;
       const parsed = safeParseJson(item.omdb_raw_json);
@@ -336,14 +346,26 @@
       return ` • ${dir}`;
     }
 
-    function shouldShowEnrich(item) {
+    function shouldShowOmdbEnrich(item) {
       const mt = norm(item.media_type || "unknown");
       if (mt !== "movie") return false;
       const status = norm(item.omdb_status || "");
       return status !== "ok";
     }
 
-    async function doEnrich(id, btn) {
+    function shouldShowIgdbEnrich(item) {
+      const mt = norm(item.media_type || "unknown");
+      if (mt !== "game") return false;
+
+      // Show if any target field is missing
+      const missingDeveloper = isBlank(item.developer);
+      const missingYear = isBlank(item.release_year);
+      const missingCover = isBlank(item.cover_url);
+      const missingIgdbId = isBlank(item.igdb_game_id);
+      return missingDeveloper || missingYear || missingCover || missingIgdbId;
+    }
+
+    async function doEnrichOmdb(id, btn) {
       const originalText = btn ? btn.textContent : null;
 
       try {
@@ -355,14 +377,36 @@
         const resp = await fetch(`/media/${id}/enrich`, { method: "POST" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
 
-        // Prefer network refresh to update director/year/poster/etc immediately
         await load({ preferNetwork: true });
       } catch (e) {
-        alert("Enrich failed: " + e);
+        alert("OMDb enrich failed: " + e);
       } finally {
         if (btn) {
           btn.disabled = false;
-          btn.textContent = originalText || "Enrich";
+          btn.textContent = originalText || "OMDb";
+        }
+      }
+    }
+
+    async function doEnrichIgdb(id, btn) {
+      const originalText = btn ? btn.textContent : null;
+
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Enriching…";
+        }
+
+        const resp = await fetch(`/media/${id}/enrich/igdb`, { method: "POST" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+
+        await load({ preferNetwork: true });
+      } catch (e) {
+        alert("IGDB enrich failed: " + e);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText || "IGDB";
         }
       }
     }
@@ -380,6 +424,7 @@
 
         const type = item.media_type ?? "unknown";
         const author = (type === "book" && item.author) ? ` • ${item.author}` : "";
+        const dev = (type === "game" && item.developer) ? ` • ${item.developer}` : "";
         const plat = item.platform ? ` • ${item.platform}` : "";
         const loc = item.location ? ` • ${item.location}` : "";
         const st = item.status ? ` • ${item.status}` : "";
@@ -387,17 +432,22 @@
         const fmtStr = item.format ? ` • ${item.format}` : "";
         const director = getDirectorDisplay(item);
 
-        const enrichHtml = shouldShowEnrich(item)
-          ? `<button class="enrich" data-id="${item.id}">Enrich</button>`
+        const omdbBtn = shouldShowOmdbEnrich(item)
+          ? `<button class="enrich enrich-omdb" data-id="${item.id}">OMDb</button>`
+          : "";
+
+        const igdbBtn = shouldShowIgdbEnrich(item)
+          ? `<button class="enrich enrich-igdb" data-id="${item.id}">IGDB</button>`
           : "";
 
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
-          <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}${escapeHtml(director)}</div>
+          <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(dev)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}${escapeHtml(director)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${item.id}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
             <button class="edit">Edit</button>
-            ${enrichHtml}
+            ${omdbBtn}
+            ${igdbBtn}
             <button class="del">Delete</button>
           </div>
         `;
@@ -405,10 +455,11 @@
         div.querySelector(".edit").addEventListener("click", () => openEdit(item.id));
         div.querySelector(".del").addEventListener("click", () => doDelete(item.id));
 
-        const enrichBtn = div.querySelector(".enrich");
-        if (enrichBtn) {
-          enrichBtn.addEventListener("click", () => doEnrich(item.id, enrichBtn));
-        }
+        const omdb = div.querySelector(".enrich-omdb");
+        if (omdb) omdb.addEventListener("click", () => doEnrichOmdb(item.id, omdb));
+
+        const igdb = div.querySelector(".enrich-igdb");
+        if (igdb) igdb.addEventListener("click", () => doEnrichIgdb(item.id, igdb));
 
         listEl.appendChild(div);
       }
@@ -427,7 +478,7 @@
 
       if (extraEl.value) {
         if (t === "book") params.set("author", extraEl.value);
-        if (t === "game") params.set("platform", extraEl.value);
+        if (t === "game") params.set("platform", extraEl.value); // server-side platform filter still useful
       }
 
       const resp = await fetch("/media?" + params.toString());
@@ -448,7 +499,6 @@
 
       try {
         const items = await fetchMediaNetwork();
-        // clear any cached _omdbParsed fields since these are fresh objects
         currentItems = items;
         saveCache(items);
         rerender();
@@ -468,6 +518,7 @@
       mType.value = item.media_type ?? "unknown";
 
       mAuthor.value = item.author ?? "";
+      mDeveloper.value = item.developer ?? "";
       mPlatform.value = item.platform ?? "";
       mFormat.value = item.format ?? "";
       mYear.value = item.release_year ?? "";
@@ -480,8 +531,16 @@
 
       updateModalVisibility();
 
+      const igdbMeta = (item.igdb_game_id || item.igdb_last_enriched_at)
+        ? ` • igdb: ${fmt(item.igdb_game_id)} @ ${fmt(item.igdb_last_enriched_at)}`
+        : "";
+
+      const omdbMeta = (item.omdb_status || item.omdb_last_fetched_at)
+        ? ` • omdb: ${fmt(item.omdb_status)} @ ${fmt(item.omdb_last_fetched_at)}`
+        : "";
+
       mMeta.textContent =
-        `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}`;
+        `barcode: ${fmt(item.barcode)} • source: ${fmt(item.source)} • added: ${fmt(item.added_at)} • updated: ${fmt(item.updated_at)}${omdbMeta}${igdbMeta}`;
 
       backdrop.style.display = "flex";
       document.body.classList.add("modalOpen");
@@ -491,6 +550,9 @@
       const t = mType.value;
       if (t === "book") authorRow.classList.remove("hidden");
       else authorRow.classList.add("hidden");
+
+      if (t === "game") developerRow.classList.remove("hidden");
+      else developerRow.classList.add("hidden");
     }
 
     function closeEdit() {
@@ -511,6 +573,7 @@
         media_type: typeVal,
 
         author: (typeVal === "book") ? mAuthor.value : "",
+        developer: (typeVal === "game") ? mDeveloper.value : "",
         platform: mPlatform.value,
 
         format: mFormat.value,

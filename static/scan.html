@@ -61,6 +61,30 @@
       font-size: .85rem;
       color: #ddd;
     }
+
+    .actions {
+      display:flex;
+      gap:.5rem;
+      flex-wrap:wrap;
+      margin-top:.8rem;
+    }
+    .enrich {
+      background:#7e57c2;
+      color:#fff;
+      padding:.55rem .8rem;
+      border-radius:10px;
+      border:0;
+      font-size:1rem;
+    }
+    .enrich[disabled] { opacity:.7; }
+    .thumb {
+      display:block;
+      width:100%;
+      max-width: 220px;
+      border-radius: 10px;
+      margin-top: .75rem;
+      background:#000;
+    }
   </style>
 </head>
 
@@ -95,12 +119,20 @@
     <div class="kv"><span class="k">Title:</span><span id="srTitle" class="v muted">—</span></div>
     <div class="kv"><span class="k">Type:</span><span id="srType" class="v muted">—</span></div>
     <div class="kv"><span class="k">Author:</span><span id="srAuthor" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Developer:</span><span id="srDeveloper" class="v muted">—</span></div>
+    <div class="kv"><span class="k">Year:</span><span id="srYear" class="v muted">—</span></div>
     <div class="kv"><span class="k">ID:</span><span id="srId" class="v muted">—</span></div>
 
-    <!-- Optional details (same format) -->
     <div class="kv"><span class="k">Barcode (normalized):</span><span id="srBarcode" class="v muted">—</span></div>
     <div class="kv"><span class="k">Source:</span><span id="srSource" class="v muted">—</span></div>
     <div class="kv"><span class="k">Platform:</span><span id="srPlatform" class="v muted">—</span></div>
+
+    <img id="srCover" class="thumb" alt="" style="display:none;" />
+
+    <div class="actions">
+      <button id="enrichOmdb" class="enrich" style="display:none;">Enrich OMDb</button>
+      <button id="enrichIgdb" class="enrich" style="display:none;">Enrich IGDB</button>
+    </div>
   </div>
 
   <div class="card">
@@ -123,10 +155,16 @@
     const srTitle = document.getElementById("srTitle");
     const srType = document.getElementById("srType");
     const srAuthor = document.getElementById("srAuthor");
+    const srDeveloper = document.getElementById("srDeveloper");
+    const srYear = document.getElementById("srYear");
     const srId = document.getElementById("srId");
     const srBarcode = document.getElementById("srBarcode");
     const srSource = document.getElementById("srSource");
     const srPlatform = document.getElementById("srPlatform");
+    const srCover = document.getElementById("srCover");
+
+    const enrichOmdbBtn = document.getElementById("enrichOmdb");
+    const enrichIgdbBtn = document.getElementById("enrichIgdb");
 
     let stream = null;
     let scanning = false;
@@ -135,6 +173,9 @@
     // Debounce duplicate scans
     let lastSent = null;
     let lastSentAt = 0;
+
+    // Track last item for enrichment buttons
+    let lastItem = null;
 
     function setStatus(text, cls = "muted") {
       statusEl.textContent = text;
@@ -155,15 +196,36 @@
       el.className = "v " + (okClass || "muted");
     }
 
+    function setCover(url) {
+      if (!url) {
+        srCover.style.display = "none";
+        srCover.removeAttribute("src");
+        srCover.alt = "";
+        return;
+      }
+      srCover.src = url;
+      srCover.alt = "Cover";
+      srCover.style.display = "block";
+    }
+
     function clearServerResponse() {
+      lastItem = null;
+      enrichOmdbBtn.style.display = "none";
+      enrichIgdbBtn.style.display = "none";
+      enrichOmdbBtn.disabled = false;
+      enrichIgdbBtn.disabled = false;
+
       setText(srResult, "—");
       setText(srTitle, "—");
       setText(srType, "—");
       setText(srAuthor, "—");
+      setText(srDeveloper, "—");
+      setText(srYear, "—");
       setText(srId, "—");
       setText(srBarcode, "—");
       setText(srSource, "—");
       setText(srPlatform, "—");
+      setCover(null);
     }
 
     function stopCamera() {
@@ -179,6 +241,95 @@
       stopBtn.style.display = "none";
       startBtn.style.display = "inline-block";
       setStatus("Stopped", "muted");
+    }
+
+    function isBlank(v) {
+      return v === null || v === undefined || String(v).trim() === "";
+    }
+
+    function shouldShowOmdb(item) {
+      const mt = String(item?.media_type || "unknown").toLowerCase().trim();
+      if (mt !== "movie") return false;
+      const status = String(item?.omdb_status || "").toLowerCase().trim();
+      return status !== "ok";
+    }
+
+    function shouldShowIgdb(item) {
+      const mt = String(item?.media_type || "unknown").toLowerCase().trim();
+      if (mt !== "game") return false;
+      const missingDeveloper = isBlank(item?.developer);
+      const missingYear = isBlank(item?.release_year);
+      const missingCover = isBlank(item?.cover_url);
+      const missingIgdbId = isBlank(item?.igdb_game_id);
+      return missingDeveloper || missingYear || missingCover || missingIgdbId;
+    }
+
+    function renderItemToUI(item, meta = {}) {
+      lastItem = item || null;
+
+      setText(srTitle, item?.title, "ok");
+      setText(srType, item?.media_type || "unknown", "muted");
+      setText(srAuthor, (item?.media_type === "book" ? (item?.author || "—") : "—"), "muted");
+      setText(srDeveloper, (item?.media_type === "game" ? (item?.developer || "—") : "—"), "muted");
+      setText(srYear, item?.release_year || "—", "muted");
+      setText(srId, item?.id, "muted");
+      setText(srBarcode, meta.normalized_barcode || item?.barcode, "muted");
+      setText(srSource, item?.source || meta?.lookup?.provider || "—", "muted");
+      setText(srPlatform, item?.platform || "—", "muted");
+
+      setCover(item?.cover_url || null);
+
+      const showOmdb = shouldShowOmdb(item);
+      const showIgdb = shouldShowIgdb(item);
+
+      enrichOmdbBtn.style.display = showOmdb ? "inline-block" : "none";
+      enrichIgdbBtn.style.display = showIgdb ? "inline-block" : "none";
+    }
+
+    async function refreshItem(id, meta = {}) {
+      try {
+        const r = await fetch(`/media/${id}`);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const item = await r.json();
+        renderItemToUI(item, meta);
+      } catch (e) {
+        // keep existing UI; show error
+        setError("Refresh failed: " + e);
+      }
+    }
+
+    async function doOmdbEnrich() {
+      if (!lastItem?.id) return;
+      enrichOmdbBtn.disabled = true;
+      enrichOmdbBtn.textContent = "Enriching…";
+
+      try {
+        const r = await fetch(`/media/${lastItem.id}/enrich`, { method: "POST" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        await refreshItem(lastItem.id, { normalized_barcode: lastItem.barcode });
+      } catch (e) {
+        setError("OMDb enrich failed: " + e);
+      } finally {
+        enrichOmdbBtn.disabled = false;
+        enrichOmdbBtn.textContent = "Enrich OMDb";
+      }
+    }
+
+    async function doIgdbEnrich() {
+      if (!lastItem?.id) return;
+      enrichIgdbBtn.disabled = true;
+      enrichIgdbBtn.textContent = "Enriching…";
+
+      try {
+        const r = await fetch(`/media/${lastItem.id}/enrich/igdb`, { method: "POST" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        await refreshItem(lastItem.id, { normalized_barcode: lastItem.barcode });
+      } catch (e) {
+        setError("IGDB enrich failed: " + e);
+      } finally {
+        enrichIgdbBtn.disabled = false;
+        enrichIgdbBtn.textContent = "Enrich IGDB";
+      }
     }
 
     async function startCamera() {
@@ -221,15 +372,8 @@
           setStatus("Saving…", "muted");
           setError("");
 
-          // Pre-fill response UI (before server response)
           setText(srResult, "saving…", "muted");
-          setText(srTitle, "—");
-          setText(srType, "—");
-          setText(srAuthor, "—");
-          setText(srId, "—");
-          setText(srBarcode, "—");
-          setText(srSource, "—");
-          setText(srPlatform, "—");
+          setCover(null);
 
           try {
             const resp = await fetch("/scan", {
@@ -249,22 +393,19 @@
               return;
             }
 
-            // Expected FastAPI response shape:
-            // { status, normalized_barcode, item: { id, title, media_type, author, platform, source, ... } }
+            // Expected shape:
+            // { status, normalized_barcode, item: {...}, lookup, db }
             const resultStatus = data?.status || "ok";
             const item = data?.item || {};
 
             setStatus("Saved. Keep scanning…", "ok");
+            setText(srResult, resultStatus, (resultStatus === "added") ? "ok" : "muted");
 
-            setText(srResult, resultStatus, resultStatus === "added" ? "ok" : "muted");
-            setText(srTitle, item.title, "ok");
-            setText(srType, item.media_type || "unknown", "muted");
-            setText(srAuthor, (item.media_type === "book" ? (item.author || "—") : "—"), "muted");
-            setText(srId, item.id, "muted");
+            // Populate from scan response first
+            renderItemToUI(item, data);
 
-            setText(srBarcode, data.normalized_barcode || item.barcode, "muted");
-            setText(srSource, item.source || data?.lookup?.provider || "—", "muted");
-            setText(srPlatform, item.platform || "—", "muted");
+            // Then refresh from server to pick up any server-side defaults / later enriches
+            if (item?.id) await refreshItem(item.id, data);
 
             navigator.vibrate?.(120);
 
@@ -283,6 +424,9 @@
 
     startBtn.addEventListener("click", startCamera);
     stopBtn.addEventListener("click", stopCamera);
+    enrichOmdbBtn.addEventListener("click", doOmdbEnrich);
+    enrichIgdbBtn.addEventListener("click", doIgdbEnrich);
+
     window.addEventListener("online", updateNet);
     window.addEventListener("offline", updateNet);
 

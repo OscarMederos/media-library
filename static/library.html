@@ -329,6 +329,7 @@
 
     function updateExtraUI() {
       const t = filterEl.value;
+      params.set("limit", "5000");
       if (t === "book") {
         extraEl.classList.remove("hidden");
         extraEl.placeholder = "Filter by author…";

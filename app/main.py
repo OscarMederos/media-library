@@ -171,6 +171,10 @@ class MediaUpdate(BaseModel):
     cover_url: str | None = None
     developer: str | None = None
 
+    igdb_game_id: int | None = None
+    igdb_cover_image_id: int | None = None
+    igdb_last_enriched_at: str | None = None
+
     notes: str | None = None
 
 
@@ -477,17 +481,44 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
 
 @app.get("/media")
 def list_media(
-    q: str | None = Query(None, description="Search title/barcode"),
-    limit: int = Query(500, ge=1, le=5000),
+    # Back-compat: library.html uses "search"; older versions used "q"
+    q: str | None = Query(None, description="Search title/title_raw/barcode (alias of 'search')"),
+    search: str | None = Query(None, description="Search title/title_raw/barcode"),
+    media_type: str | None = Query(None, description="Filter by media type (book/movie/game)"),
+    author: str | None = Query(None, description="Filter by author (books)"),
+    platform: str | None = Query(None, description="Filter by platform (games)"),
+    developer: str | None = Query(None, description="Filter by developer (games)"),
+    limit: int = Query(5000, ge=1, le=20000),
 ) -> list[dict[str, Any]]:
     db = get_db()
-    params: list[Any] = []
-    sql = MEDIA_SELECT
 
-    if q and q.strip():
-        qn = f"%{q.strip()}%"
-        sql += " WHERE title LIKE ? OR title_raw LIKE ? OR barcode LIKE ?"
-        params.extend([qn, qn, qn])
+    where: list[str] = []
+    params: list[Any] = []
+
+    # search (prefer 'search' if provided)
+    s = (search if (search and search.strip()) else q) or None
+    if s and s.strip():
+        like = f"%{s.strip()}%"
+        where.append("(title LIKE ? OR title_raw LIKE ? OR barcode LIKE ?)")
+        params.extend([like, like, like])
+
+    if media_type and media_type.strip():
+        where_mt, mt_params = _media_type_sql_values(media_type)
+        where.append(where_mt)
+        params.extend(mt_params)
+
+    def add_like(field: str, value: str | None) -> None:
+        if value and value.strip():
+            where.append(f"({field} IS NOT NULL AND {field} LIKE ?)")
+            params.append(f"%{value.strip()}%")
+
+    add_like("author", author)
+    add_like("platform", platform)
+    add_like("developer", developer)
+
+    sql = MEDIA_SELECT
+    if where:
+        sql += " WHERE " + " AND ".join(where)
 
     sql += " ORDER BY added_at DESC, id DESC LIMIT ?"
     params.append(limit)

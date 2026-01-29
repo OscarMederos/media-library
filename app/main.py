@@ -542,6 +542,15 @@ def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
         add("cover_url", patch.cover_url)
     if patch.developer is not None:
         add("developer", patch.developer)
+
+    # IGDB fields: allow explicit null to clear values (distinguish unset vs set-to-null)
+    if "igdb_game_id" in patch.model_fields_set:
+        add("igdb_game_id", patch.igdb_game_id)
+    if "igdb_cover_image_id" in patch.model_fields_set:
+        add("igdb_cover_image_id", patch.igdb_cover_image_id)
+    if "igdb_last_enriched_at" in patch.model_fields_set:
+        add("igdb_last_enriched_at", patch.igdb_last_enriched_at)
+
     if patch.notes is not None:
         add("notes", patch.notes)
 

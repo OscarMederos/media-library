@@ -172,6 +172,25 @@
           </div>
         </div>
 
+
+        <div id="igdbRow" class="row2 hidden">
+          <div>
+            <label>IGDB Game ID</label>
+            <input id="mIgdbGameId" type="number" min="0" step="1" placeholder="e.g., 1020" />
+          </div>
+          <div>
+            <label>IGDB Cover Image ID</label>
+            <input id="mIgdbCoverImageId" type="number" min="0" step="1" placeholder="e.g., 987654" />
+          </div>
+        </div>
+
+        <div id="igdbRow2" class="row2 hidden">
+          <div style="grid-column: 1 / -1;">
+            <label>IGDB Last Enriched At</label>
+            <input id="mIgdbLastEnrichedAt" placeholder="YYYY-MM-DD HH:MM:SS" />
+          </div>
+        </div>
+
         <div class="row3">
           <div>
             <label>Platform / Console (games)</label>
@@ -226,7 +245,7 @@
 
   <script>
     // Bump this if you change the cache schema
-    const CACHE_KEY = "mediaLibrary.mediaCache.v5";
+    const CACHE_KEY = "mediaLibrary.mediaCache.v6";
 
     const listEl = document.getElementById("list");
     const searchEl = document.getElementById("search");
@@ -244,6 +263,11 @@
     const developerRow = document.getElementById("developerRow");
     const mAuthor = document.getElementById("mAuthor");
     const mDeveloper = document.getElementById("mDeveloper");
+    const igdbRow = document.getElementById("igdbRow");
+    const igdbRow2 = document.getElementById("igdbRow2");
+    const mIgdbGameId = document.getElementById("mIgdbGameId");
+    const mIgdbCoverImageId = document.getElementById("mIgdbCoverImageId");
+    const mIgdbLastEnrichedAt = document.getElementById("mIgdbLastEnrichedAt");
     const mPlatform = document.getElementById("mPlatform");
     const mFormat = document.getElementById("mFormat");
     const mYear = document.getElementById("mYear");
@@ -379,6 +403,9 @@
     function shouldShowIgdbEnrich(item) {
       const mt = norm(item.media_type || "unknown");
       if (mt !== "game") return false;
+
+      // If we've already enriched (or at least attempted and stored an id/timestamp), don't show again.
+      if (!isBlank(item.igdb_last_enriched_at) || !isBlank(item.igdb_game_id)) return false;
 
       const missingDeveloper = isBlank(item.developer);
       const missingYear = isBlank(item.release_year);
@@ -553,6 +580,10 @@
       mCoverUrl.value = item.cover_url ?? "";
       mNotes.value = item.notes ?? "";
 
+      mIgdbGameId.value = item.igdb_game_id ?? "";
+      mIgdbCoverImageId.value = item.igdb_cover_image_id ?? "";
+      mIgdbLastEnrichedAt.value = item.igdb_last_enriched_at ?? "";
+
       updateModalVisibility();
 
       const igdbMeta = (item.igdb_game_id || item.igdb_last_enriched_at)
@@ -575,8 +606,15 @@
       if (t === "book") authorRow.classList.remove("hidden");
       else authorRow.classList.add("hidden");
 
-      if (t === "game") developerRow.classList.remove("hidden");
-      else developerRow.classList.add("hidden");
+      if (t === "game") {
+        developerRow.classList.remove("hidden");
+        igdbRow.classList.remove("hidden");
+        igdbRow2.classList.remove("hidden");
+      } else {
+        developerRow.classList.add("hidden");
+        igdbRow.classList.add("hidden");
+        igdbRow2.classList.add("hidden");
+      }
     }
 
     function closeEdit() {
@@ -605,7 +643,10 @@
         status: mStatus.value,
         release_year: yearVal ? parseInt(yearVal, 10) : null,
         cover_url: mCoverUrl.value,
-        notes: mNotes.value
+        notes: mNotes.value,
+        igdb_game_id: (typeVal === "game") ? (String(mIgdbGameId.value ?? "").trim() ? parseInt(String(mIgdbGameId.value).trim(), 10) : null) : null,
+        igdb_cover_image_id: (typeVal === "game") ? (String(mIgdbCoverImageId.value ?? "").trim() ? parseInt(String(mIgdbCoverImageId.value).trim(), 10) : null) : null,
+        igdb_last_enriched_at: (typeVal === "game") ? (String(mIgdbLastEnrichedAt.value ?? "").trim() || null) : null
       };
 
       try {

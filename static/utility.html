@@ -484,7 +484,7 @@
       setBusy(true);
       try {
         log("Loading /media ...");
-        loaded = await apiJson("/media", { method: "GET" });
+        loaded = await apiJson("/media?limit=5000", { method: "GET" });
         $("loadedCount").textContent = String(Array.isArray(loaded) ? loaded.length : 0);
         log(`Loaded ${loaded.length} rows.`, "ok");
         applyScopeAndRefresh();

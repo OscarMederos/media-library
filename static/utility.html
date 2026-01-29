@@ -72,9 +72,19 @@
 
   <div class="panel">
     <div class="row">
+
       <button id="btnLoad">Load data</button>
       <button id="btnReport">Generate charts</button>
       <button id="btnExportPng">Export charts (PNG)</button>
+
+      <button id="btnBulkIgdb">Bulk update IGDB metadata</button>
+      <button id="btnBulkOmdb">Bulk update OMDb metadata</button>
+
+      <label class="muted" for="bulkModeSel" style="margin-left:.35rem;">Bulk mode</label>
+      <select id="bulkModeSel">
+        <option value="fill" selected>Fill missing only</option>
+        <option value="force">Force refresh</option>
+      </select>
 
       <div class="spacer"></div>
 
@@ -142,6 +152,28 @@
           </table>
         </div>
       </div>
+
+      <div class="panel chartTile">
+        <div class="chartHeader">
+          <div class="chartTitle">Games missing IGDB metadata</div>
+          <div id="kpiGamesMissingIgdb" class="chartKpi"></div>
+        </div>
+        <div class="chartBox"><canvas id="chartGamesMissingIgdb"></canvas></div>
+        <div id="legendGamesMissingIgdb" class="legend"></div>
+
+        <div class="row" style="margin-top:.5rem;">
+          <div class="small">First <span id="gamesIgdbN" class="pill">25</span> missing</div>
+          <div class="spacer"></div>
+          <button id="btnCopyGamesIgdbCsv">Copy CSV</button>
+        </div>
+        <div class="tableWrap">
+          <table>
+            <thead><tr><th>ID</th><th>Barcode</th><th>Title</th></tr></thead>
+            <tbody id="tblGamesMissingIgdb"></tbody>
+          </table>
+        </div>
+      </div>
+
 
       <div class="panel chartTile">
         <div class="chartHeader">
@@ -214,6 +246,7 @@
     let lastOffenders = {
       booksMissingAuthor: [],
       gamesMissingPlatform: [],
+      gamesMissingIgdb: [],
       moviesMissingFormat: [],
       moviesMissingOmdb: [],
       dupes: [],
@@ -223,6 +256,7 @@
       mediaType: null,
       booksMissingAuthor: null,
       gamesMissingPlatform: null,
+      gamesMissingIgdb: null,
       moviesMissingFormat: null,
       moviesMissingOmdb: null,
     };
@@ -237,7 +271,7 @@
     }
 
     function setBusy(isBusy) {
-      for (const id of ["btnLoad","btnReport","btnExportPng","btnCopyBooksCsv","btnCopyGamesCsv","btnCopyMoviesCsv","btnCopyMoviesOmdbCsv","btnCopyDupesCsv"]) {
+      for (const id of ["btnLoad","btnReport","btnExportPng","btnBulkIgdb","btnBulkOmdb","btnCopyBooksCsv","btnCopyGamesCsv","btnCopyGamesIgdbCsv","btnCopyMoviesCsv","btnCopyMoviesOmdbCsv","btnCopyDupesCsv"]) {
         $(id).disabled = isBusy;
       }
       $("scopeSel").disabled = isBusy;
@@ -314,6 +348,7 @@
       charts.mediaType = destroyChart(charts.mediaType);
       charts.booksMissingAuthor = destroyChart(charts.booksMissingAuthor);
       charts.gamesMissingPlatform = destroyChart(charts.gamesMissingPlatform);
+      charts.gamesMissingIgdb = destroyChart(charts.gamesMissingIgdb);
       charts.moviesMissingFormat = destroyChart(charts.moviesMissingFormat);
       charts.moviesMissingOmdb = destroyChart(charts.moviesMissingOmdb);
     }
@@ -536,6 +571,25 @@
       lastOffenders.gamesMissingPlatform = gameRows.filter(r => isEmpty(r.platform)).slice(0, OFFENDER_LIMIT);
       renderOffenders("tblGamesMissingPlatform", lastOffenders.gamesMissingPlatform);
 
+
+      // 3b) games missing IGDB metadata (not enriched)
+      const gamesMissingIgdbRows = gameRows.filter(r => isEmpty(r.igdb_game_id) || isEmpty(r.igdb_last_enriched_at));
+      const gamesMissingIgdb = gamesMissingIgdbRows.length;
+      const gamesHasIgdb = Math.max(0, gameRows.length - gamesMissingIgdb);
+      charts.gamesMissingIgdb = buildDoughnut(
+        "chartGamesMissingIgdb",
+        ["has IGDB", "missing IGDB"],
+        [gamesHasIgdb, gamesMissingIgdb],
+        "Games missing IGDB"
+      );
+      setKpi("kpiGamesMissingIgdb", `(${gamesMissingIgdb}/${gameRows.length})`);
+      setLegend("legendGamesMissingIgdb", [
+        `has IGDB: ${gamesHasIgdb} (${pct(gamesHasIgdb, gameRows.length)})`,
+        `missing IGDB: ${gamesMissingIgdb} (${pct(gamesMissingIgdb, gameRows.length)})`,
+      ]);
+      lastOffenders.gamesMissingIgdb = gamesMissingIgdbRows.slice(0, OFFENDER_LIMIT);
+      renderOffenders("tblGamesMissingIgdb", lastOffenders.gamesMissingIgdb);
+
       // 4) movies missing format
       const movieRows = scoped.filter(isMovie);
       const moviesMissingFormat = movieRows.filter(r => isEmpty(r.format)).length;
@@ -588,6 +642,7 @@
         ["chartMediaType", "media_type"],
         ["chartBooksMissingAuthor", "books_missing_author"],
         ["chartGamesMissingPlatform", "games_missing_platform"],
+        ["chartGamesMissingIgdb", "games_missing_igdb"],
         ["chartMoviesMissingFormat", "movies_missing_format"],
         ["chartMoviesMissingOmdb", "movies_missing_omdb"],
       ];
@@ -636,9 +691,141 @@
 
     $("btnCopyBooksCsv").addEventListener("click", () => copyOffendersCsv("booksMissingAuthor"));
     $("btnCopyGamesCsv").addEventListener("click", () => copyOffendersCsv("gamesMissingPlatform"));
+    $("btnCopyGamesIgdbCsv").addEventListener("click", () => copyOffendersCsv("gamesMissingIgdb"));
     $("btnCopyMoviesCsv").addEventListener("click", () => copyOffendersCsv("moviesMissingFormat"));
     $("btnCopyMoviesOmdbCsv").addEventListener("click", () => copyOffendersCsv("moviesMissingOmdb"));
     $("btnCopyDupesCsv").addEventListener("click", copyDupesCsv);
+
+
+    function bulkMode() {
+      return $("bulkModeSel")?.value || "fill";
+    }
+
+    function sampleList(rows, n=10) {
+      return rows.slice(0, n).map(r => `#${r.id} — ${String(r.title || "").trim() || "(no title)"}`).join("\n");
+    }
+
+    async function bulkConfirm(action, rows) {
+      if (!rows.length) {
+        log(`No candidates for ${action} in current scope.`, "warn");
+        return false;
+      }
+      const mode = bulkMode();
+      const preview = sampleList(rows, 10);
+      const msg =
+        `${action} will update ${rows.length} item(s) in the current scope.\n\n` +
+        `Mode: ${mode === "force" ? "Force refresh" : "Fill missing only"}\n\n` +
+        `Sample (first 10):\n${preview}\n\n` +
+        `This cannot be undone automatically. Continue?`;
+      if (!window.confirm(msg)) return false;
+
+      const token = window.prompt("Type ENRICH to proceed:", "");
+      return (token || "").trim().toUpperCase() === "ENRICH";
+    }
+
+    async function bulkRun(rows, fnCall, label) {
+      const maxErrors = 3;
+      let ok = 0;
+      let err = 0;
+
+      setBusy(true);
+      try {
+        for (let i = 0; i < rows.length; i++) {
+          const r = rows[i];
+          try {
+            await fnCall(r);
+            ok++;
+            if (i % 10 === 0 || i === rows.length - 1) {
+              log(`${label}: ${ok}/${rows.length} ok (errors: ${err})`, "ok");
+            }
+          } catch (e) {
+            err++;
+            log(`${label} failed for id=${r.id}: ${String(e)}`, "err");
+            if (err >= maxErrors) {
+              log(`${label}: stopping after ${err} errors.`, "err");
+              break;
+            }
+          }
+          // light throttling so you don't hammer IGDB/OMDb or your Pi
+          await new Promise(res => setTimeout(res, 200));
+        }
+      } finally {
+        setBusy(false);
+      }
+
+      // reload and refresh charts
+      await loadData();
+      generateCharts();
+      log(`${label} finished: ok=${ok}, errors=${err}`, err ? "warn" : "ok");
+    }
+
+    async function bulkUpdateIgdb() {
+      if (!Array.isArray(loaded) || loaded.length === 0) {
+        log("No loaded rows. Click Load data first.", "warn");
+        return;
+      }
+      applyScopeAndRefresh();
+
+      // Validation rules:
+      // - games only
+      // - must have a title (IGDB search depends on it)
+      // - target rows that haven't been enriched yet (missing igdb_game_id or igdb_last_enriched_at)
+      const gameRows = scoped.filter(isGame);
+      const candidates = gameRows.filter(r =>
+        !isEmpty(r.title) && (isEmpty(r.igdb_game_id) || isEmpty(r.igdb_last_enriched_at))
+      );
+
+      if (!(await bulkConfirm("Bulk IGDB enrichment", candidates))) {
+        log("Bulk IGDB enrichment cancelled.", "warn");
+        return;
+      }
+
+      // Mode currently doesn't change the IGDB endpoint behavior; it's surfaced for consistency with OMDb.
+      await bulkRun(
+        candidates,
+        async (r) => apiJson(`/media/${encodeURIComponent(String(r.id))}/enrich/igdb`, { method: "POST" }),
+        "IGDB bulk enrich"
+      );
+    }
+
+    async function bulkUpdateOmdb() {
+      if (!Array.isArray(loaded) || loaded.length === 0) {
+        log("No loaded rows. Click Load data first.", "warn");
+        return;
+      }
+      applyScopeAndRefresh();
+
+      const mode = bulkMode();
+      const movieRows = scoped.filter(isMovie);
+
+      // Validation rules:
+      // - movies only
+      // - must have a title (OMDb can use title/year; imdb_id optional)
+      // - fill mode targets missing or non-ok OMDb
+      // - force mode targets all movies
+      const candidates = (mode === "force")
+        ? movieRows.filter(r => !isEmpty(r.title) || !isEmpty(r.omdb_imdb_id))
+        : movieRows.filter(r => {
+            const status = String(r.omdb_status || "").trim().toLowerCase();
+            return isEmpty(r.omdb_raw_json) || status !== "ok";
+          });
+
+      if (!(await bulkConfirm("Bulk OMDb enrichment", candidates))) {
+        log("Bulk OMDb enrichment cancelled.", "warn");
+        return;
+      }
+
+      const forceQ = mode === "force" ? "true" : "false";
+      await bulkRun(
+        candidates,
+        async (r) => apiJson(`/media/${encodeURIComponent(String(r.id))}/enrich?force=${forceQ}`, { method: "POST" }),
+        "OMDb bulk enrich"
+      );
+    }
+
+    $("btnBulkIgdb").addEventListener("click", bulkUpdateIgdb);
+    $("btnBulkOmdb").addEventListener("click", bulkUpdateOmdb);
+
 
     // Auto-load once
     loadData();

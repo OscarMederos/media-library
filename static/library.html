@@ -329,7 +329,6 @@
 
     function updateExtraUI() {
       const t = filterEl.value;
-      params.set("limit", "5000");
       if (t === "book") {
         extraEl.classList.remove("hidden");
         extraEl.placeholder = "Filter by author…";
@@ -516,6 +515,7 @@
     async function fetchMediaNetwork() {
       const params = new URLSearchParams();
       const t = filterEl.value;
+      params.set("limit", "5000");
 
       if (t) params.set("media_type", t);
       if (searchEl.value) params.set("search", searchEl.value);

@@ -709,7 +709,7 @@
       if (!rows.length) {
         log(`No candidates for ${action} in current scope.`, "warn");
         return false;
-      }
+    }
       const mode = bulkMode();
       const preview = sampleList(rows, 10);
       const msg =
@@ -717,10 +717,8 @@
         `Mode: ${mode === "force" ? "Force refresh" : "Fill missing only"}\n\n` +
         `Sample (first 10):\n${preview}\n\n` +
         `This cannot be undone automatically. Continue?`;
-      if (!window.confirm(msg)) return false;
-
-      const token = window.prompt("Type ENRICH to proceed:", "");
-      return (token || "").trim().toUpperCase() === "ENRICH";
+      
+      return window.confirm(msg);
     }
 
     async function bulkRun(rows, fnCall, label) {

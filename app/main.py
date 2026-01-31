@@ -16,7 +16,9 @@ from pydantic import BaseModel
 from igdb_enrich import IgdbClient, IgdbConfig, enrich_media_game_from_igdb, ensure_igdb_columns
 
 DB_PATH = os.getenv("DB_PATH", "/data/media.db")
-BARCODELOOKUP_API_KEY = os.getenv("BARCODELOOKUP_API_KEY")
+
+# Migrated from BarcodeLookup -> UPCDatabase
+UPCDATABASE_API_KEY = os.getenv("UPCDATABASE_API_KEY")
 
 OMDB_API_KEY = os.getenv("OMDB_API_KEY")
 OMDB_BASE_URL = os.getenv("OMDB_BASE_URL", "https://www.omdbapi.com/")
@@ -274,50 +276,87 @@ def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, str | None, dict[str
         return None, None, meta
 
 
-def lookup_upc_barcodelookup(upc: str) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
+def _infer_media_type_from_text(text: str | None) -> str:
+    t = (text or "").lower()
+    if not t:
+        return "unknown"
+    if any(k in t for k in ("book", "paperback", "hardcover", "isbn")):
+        return "book"
+    if any(k in t for k in ("movie", "dvd", "blu-ray", "bluray", "4k uhd", "uhd")):
+        return "movie"
+    if any(k in t for k in ("game", "playstation", "ps4", "ps5", "xbox", "nintendo", "switch")):
+        return "game"
+    return "unknown"
+
+
+def lookup_upc_upcdatabase(upc: str) -> tuple[str | None, str | None, str | None, dict[str, Any]]:
     """
+    UPCDatabase: https://api.upcdatabase.org/product/{barcode}
+    Auth: Authorization: Bearer <token>
+
     Returns: (title, inferred_media_type, cover_url, meta)
     """
-    meta: dict[str, Any] = {"path": "upc", "provider": "barcodelookup"}
-    if not BARCODELOOKUP_API_KEY:
-        meta["message"] = "BARCODELOOKUP_API_KEY not set"
+    meta: dict[str, Any] = {"path": "upc", "provider": "upcdatabase"}
+    if not UPCDATABASE_API_KEY:
+        meta["message"] = "UPCDATABASE_API_KEY not set"
         return None, None, None, meta
 
     try:
         r = requests.get(
-            "https://api.barcodelookup.com/v3/products",
-            params={"barcode": upc, "formatted": "y", "key": BARCODELOOKUP_API_KEY},
+            f"https://api.upcdatabase.org/product/{upc}",
             timeout=10,
-            headers={"User-Agent": "media-library/1.0"},
+            headers={
+                "User-Agent": "media-library/1.0",
+                "Authorization": f"Bearer {UPCDATABASE_API_KEY}",
+            },
         )
         meta["http_status"] = r.status_code
+
+        # Capture rate/limit headers when present
+        meta["limits"] = {
+            "APILimit-Lookups": r.headers.get("APILimit-Lookups"),
+            "APILimit-Search": r.headers.get("APILimit-Search"),
+            "APILimit-Currency": r.headers.get("APILimit-Currency"),
+            "APILimit-Reset": r.headers.get("APILimit-Reset"),
+        }
+
         if not r.ok:
             meta["message"] = f"HTTP {r.status_code}"
             return None, None, None, meta
 
         data = r.json() or {}
-        products = data.get("products") or []
-        if not products:
-            meta["message"] = "No products"
+        meta["raw_success"] = data.get("success")
+
+        # According to docs, "success" can be "true"/"false" (string)
+        success_val = str(data.get("success", "")).strip().lower()
+        if success_val not in {"true", "1", "yes"}:
+            meta["message"] = data.get("message") or "Not found"
             return None, None, None, meta
 
-        p0 = products[0] or {}
-        title = (p0.get("title") or "").strip() or None
+        title = (data.get("title") or "").strip() or None
 
-        # Attempt to infer media_type from category or title
-        cat = (p0.get("category") or "").lower()
-        inferred = "unknown"
-        if "book" in cat:
-            inferred = "book"
-        elif "movie" in cat or "dvd" in cat or "blu-ray" in cat:
-            inferred = "movie"
-        elif "game" in cat or "playstation" in cat or "xbox" in cat or "nintendo" in cat:
-            inferred = "game"
+        # Try category-like fields if present, else infer from title/description
+        category = (data.get("category") or data.get("category_name") or "").strip() or None
+        description = (data.get("description") or "").strip() or None
+        inferred = _infer_media_type_from_text(category) if category else _infer_media_type_from_text(title or description)
 
-        images = p0.get("images") or []
-        cover_url = images[0] if images and isinstance(images[0], str) else None
+        # Best-effort cover extraction (docs don't guarantee an image field)
+        cover_url: str | None = None
+        images = data.get("images")
+        if isinstance(images, list) and images:
+            first = images[0]
+            if isinstance(first, str) and first.strip():
+                cover_url = first.strip()
+        if not cover_url:
+            img = data.get("image") or data.get("imageUrl") or data.get("image_url")
+            if isinstance(img, str) and img.strip():
+                cover_url = img.strip()
 
-        meta["picked"] = {"title": title, "category": p0.get("category"), "cover_url": cover_url}
+        meta["picked"] = {
+            "title": title,
+            "category": category,
+            "cover_url": cover_url,
+        }
         return title, inferred, cover_url, meta
     except Exception as e:
         meta["http_status"] = None
@@ -360,15 +399,15 @@ def lookup_metadata(barcode: str) -> tuple[str, str, str, str | None, str, str |
 
     # UPC/EAN for general items (movies/games/etc)
     if len(normalized) in (12, 13):
-        title, inferred, cover_url, meta = lookup_upc_barcodelookup(normalized)
+        title, inferred, cover_url, meta = lookup_upc_upcdatabase(normalized)
         payload: dict[str, Any] | None = None
         if title or cover_url:
             payload = {"title": title, "cover_url": cover_url}
 
         return (
             title or "Unknown Item",
-            inferred,
-            "barcodelookup" if BARCODELOOKUP_API_KEY else "none",
+            inferred or "unknown",
+            "upcdatabase" if UPCDATABASE_API_KEY else "none",
             json.dumps(payload) if payload else None,
             json.dumps(meta),
             None,

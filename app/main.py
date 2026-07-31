@@ -140,10 +140,16 @@ def init_db() -> None:
 
     _ensure_index(db, "idx_media_omdb_imdb_id", "CREATE INDEX idx_media_omdb_imdb_id ON media(omdb_imdb_id)")
     _ensure_index(db, "idx_media_omdb_status", "CREATE INDEX idx_media_omdb_status ON media(omdb_status)")
+    _ensure_index(db, "idx_media_media_type", "CREATE INDEX idx_media_media_type ON media(media_type)")
+    _ensure_index(db, "idx_media_author", "CREATE INDEX idx_media_author ON media(author)")
+    _ensure_index(db, "idx_media_platform", "CREATE INDEX idx_media_platform ON media(platform)")
 
     # IGDB auto-migration
     ensure_igdb_columns(db)
     db.commit()
+
+    # developer column only exists after ensure_igdb_columns() runs, so its index goes here
+    _ensure_index(db, "idx_media_developer", "CREATE INDEX idx_media_developer ON media(developer)")
 
     db.close()
 

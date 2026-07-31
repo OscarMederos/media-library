@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -40,11 +40,20 @@ if IGDB_CLIENT_ID and IGDB_CLIENT_SECRET:
 # -----------------------------
 # DB helpers
 # -----------------------------
-def get_db() -> sqlite3.Connection:
+def _connect() -> sqlite3.Connection:
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
+    db.execute("PRAGMA busy_timeout = 5000")
     return db
 
+
+def get_db():
+    """FastAPI dependency: yields a connection and always closes it after the request."""
+    db = _connect()
+    try:
+        yield db
+    finally:
+        db.close()
 
 def _ensure_column(db: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
     cols = [r["name"] for r in db.execute(f"PRAGMA table_info({table})").fetchall()]
@@ -65,7 +74,9 @@ def _ensure_index(db: sqlite3.Connection, index_name: str, ddl: str) -> None:
 
 def init_db() -> None:
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    db = get_db()
+    db = _connect()
+
+    db.execute("PRAGMA journal_mode=WAL")
 
     db.execute(
         """
@@ -466,7 +477,7 @@ def omdb_fetch_movie(*, imdb_id: str | None, title: str | None, year: int | None
 # Endpoints
 # -----------------------------
 @app.post("/scan")
-def scan_barcode(req: ScanRequest) -> dict[str, Any]:
+def scan_barcode(req: ScanRequest, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     t0 = time.time()
     input_barcode = req.barcode
     normalized = normalize_barcode(input_barcode)
@@ -531,7 +542,6 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
 
 @app.get("/media")
 def list_media(
-    # Back-compat: library.html uses "search"; older versions used "q"
     q: str | None = Query(None, description="Search title/title_raw/barcode (alias of 'search')"),
     search: str | None = Query(None, description="Search title/title_raw/barcode"),
     media_type: str | None = Query(None, description="Filter by media type (book/movie/game)"),
@@ -539,8 +549,8 @@ def list_media(
     platform: str | None = Query(None, description="Filter by platform (games)"),
     developer: str | None = Query(None, description="Filter by developer (games)"),
     limit: int = Query(5000, ge=1, le=20000),
+    db: sqlite3.Connection = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    db = get_db()
 
     where: list[str] = []
     params: list[Any] = []
@@ -578,8 +588,8 @@ def list_media(
 
 
 @app.get("/media/{item_id}")
-def get_media(item_id: int) -> dict[str, Any]:
-    db = get_db()
+@app.get("/media/{item_id}")
+def get_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not Found")
@@ -587,8 +597,9 @@ def get_media(item_id: int) -> dict[str, Any]:
 
 
 @app.patch("/media/{item_id}")
-def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
-    db = get_db()
+def update_media(
+    item_id: int, patch: MediaUpdate, db: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
     exists = db.execute("SELECT id FROM media WHERE id = ?", (item_id,)).fetchone()
     if not exists:
         raise HTTPException(status_code=404, detail="Not Found")
@@ -650,8 +661,7 @@ def update_media(item_id: int, patch: MediaUpdate) -> dict[str, Any]:
 
 
 @app.delete("/media/{item_id}")
-def delete_media(item_id: int) -> dict[str, Any]:
-    db = get_db()
+def delete_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     cur = db.cursor()
     cur.execute("DELETE FROM media WHERE id = ?", (item_id,))
     db.commit()
@@ -661,8 +671,9 @@ def delete_media(item_id: int) -> dict[str, Any]:
 
 
 @app.post("/media/{item_id}/enrich")
-def enrich_media_movie(item_id: int, force: bool = Query(False)) -> dict[str, Any]:
-    db = get_db()
+def enrich_media_movie(
+    item_id: int, force: bool = Query(False), db: sqlite3.Connection = Depends(get_db)
+) -> dict[str, Any]:
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Not Found")
@@ -739,11 +750,9 @@ def enrich_media_movie(item_id: int, force: bool = Query(False)) -> dict[str, An
 
 
 @app.post("/media/{item_id}/enrich/igdb")
-def enrich_media_igdb(item_id: int) -> dict[str, Any]:
+def enrich_media_igdb(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     if igdb_client is None:
         raise HTTPException(status_code=500, detail="IGDB not configured (missing IGDB_CLIENT_ID/IGDB_CLIENT_SECRET)")
-
-    db = get_db()
     try:
         return enrich_media_game_from_igdb(db=db, igdb=igdb_client, media_id=item_id, logger=logger)
     except Exception as e:
@@ -764,8 +773,7 @@ def _media_type_sql_values(media_type: str) -> tuple[str, list[Any]]:
 
 
 @app.get("/reports/summary")
-def report_summary() -> dict[str, Any]:
-    db = get_db()
+def report_summary(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
 
     rows = db.execute(
         "SELECT COALESCE(NULLIF(TRIM(media_type), ''), 'unknown') AS mt, COUNT(*) AS n "
@@ -813,14 +821,13 @@ def report_missing(
     media_type: str = Query(..., description="book | movie | game | video_game"),
     field: str = Query(..., description="author | platform | format | cover_url"),
     limit: int = Query(25, ge=1, le=500),
+    db: sqlite3.Connection = Depends(get_db),
 ) -> list[dict[str, Any]]:
     allowed_fields = {"author", "platform", "format", "cover_url"}
     if field not in allowed_fields:
         raise HTTPException(status_code=400, detail=f"field must be one of: {sorted(allowed_fields)}")
 
     where_mt, mt_params = _media_type_sql_values(media_type)
-
-    db = get_db()
 
     sql = (
         MEDIA_SELECT

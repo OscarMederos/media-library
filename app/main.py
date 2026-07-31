@@ -41,7 +41,10 @@ if IGDB_CLIENT_ID and IGDB_CLIENT_SECRET:
 # DB helpers
 # -----------------------------
 def _connect() -> sqlite3.Connection:
-    db = sqlite3.connect(DB_PATH)
+    # check_same_thread=False: FastAPI's threadpool for sync dependencies can open
+    # and close a generator dependency on different worker threads; each connection
+    # here is still only ever used within a single request, never shared concurrently.
+    db = sqlite3.connect(DB_PATH, check_same_thread=False)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA busy_timeout = 5000")
     return db

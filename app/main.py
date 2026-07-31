@@ -290,16 +290,42 @@ def lookup_isbn_openlibrary(isbn: str) -> tuple[str | None, str | None, dict[str
         return None, None, meta
 
 
-def _infer_media_type_from_text(text: str | None) -> str:
-    t = (text or "").lower()
-    if not t:
-        return "unknown"
-    if any(k in t for k in ("book", "paperback", "hardcover", "isbn")):
+_BOOK_KEYWORDS = (
+    "book", "paperback", "hardcover", "hardback", "isbn", "novel",
+    "textbook", "audiobook", "graphic novel",
+)
+_MOVIE_KEYWORDS = (
+    "movie", "dvd", "blu-ray", "bluray", "blu ray", "4k uhd", "uhd",
+    "digital code", "steelbook", "film",
+)
+_GAME_KEYWORDS = (
+    "game", "playstation", "ps5", "ps4", "ps3", "ps2", "xbox",
+    "nintendo", "switch", "wii", "steam", "video game", "videogame",
+)
+
+
+def _infer_one(text: str) -> str:
+    t = text.lower()
+    if any(k in t for k in _BOOK_KEYWORDS):
         return "book"
-    if any(k in t for k in ("movie", "dvd", "blu-ray", "bluray", "4k uhd", "uhd")):
+    if any(k in t for k in _MOVIE_KEYWORDS):
         return "movie"
-    if any(k in t for k in ("game", "playstation", "ps4", "ps5", "xbox", "nintendo", "switch")):
+    if any(k in t for k in _GAME_KEYWORDS):
         return "game"
+    return "unknown"
+
+
+def _infer_media_type_from_text(*candidates: str | None) -> str:
+    """
+    Infers media type by checking each candidate text in order (e.g. category,
+    then title, then description) and returning the first non-"unknown" match.
+    """
+    for c in candidates:
+        if not c:
+            continue
+        guess = _infer_one(c)
+        if guess != "unknown":
+            return guess
     return "unknown"
 
 
@@ -352,7 +378,7 @@ def lookup_upc_upcdatabase(upc: str) -> tuple[str | None, str | None, str | None
         # Try category-like fields if present, else infer from title/description
         category = (data.get("category") or data.get("category_name") or "").strip() or None
         description = (data.get("description") or "").strip() or None
-        inferred = _infer_media_type_from_text(category) if category else _infer_media_type_from_text(title or description)
+        inferred = _infer_media_type_from_text(category, title, description)
 
         # Best-effort cover extraction (docs don't guarantee an image field)
         cover_url: str | None = None
@@ -589,7 +615,6 @@ def list_media(
 
 
 @app.get("/media/{item_id}")
-@app.get("/media/{item_id}")
 def get_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
     if not row:
@@ -760,6 +785,52 @@ def enrich_media_igdb(item_id: int, db: sqlite3.Connection = Depends(get_db)) ->
         logger.exception("IGDB enrich failed media_id=%s", item_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
 
+_UNKNOWN_TITLES = {"unknown book", "unknown item"}
+
+
+@app.post("/media/{item_id}/relookup")
+def relookup_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """
+    Re-runs metadata lookup for an item's barcode (e.g. after an initial scan
+    failed to find a match, or a provider's data has since improved). Only
+    overwrites title/author/media_type/source if the new lookup actually finds
+    something — a repeated miss leaves the existing row untouched.
+    """
+    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    item = dict(row)
+    barcode = (item.get("barcode") or "").strip()
+    if not barcode:
+        raise HTTPException(status_code=400, detail="Item has no barcode to look up")
+
+    title, media_type, source, source_payload, lookup_debug, author = lookup_metadata(barcode)
+
+    if (title or "").strip().lower() in _UNKNOWN_TITLES:
+        return {
+            "status": "still_unknown",
+            "item": item,
+            "lookup": json.loads(lookup_debug) if lookup_debug else None,
+        }
+
+    db.execute(
+        """
+        UPDATE media
+        SET title = ?, title_raw = ?, media_type = ?, author = ?,
+            source = ?, source_payload = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (title, title, media_type, author, source, source_payload, item_id),
+    )
+    db.commit()
+
+    row2 = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    return {
+        "status": "updated",
+        "item": dict(row2) if row2 else item,
+        "lookup": json.loads(lookup_debug) if lookup_debug else None,
+    }
 
 def _media_type_sql_values(media_type: str) -> tuple[str, list[Any]]:
     mt = (media_type or "").strip().lower()

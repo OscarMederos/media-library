@@ -399,7 +399,11 @@
       const status = norm(item.omdb_status || "");
       return status !== "ok";
     }
-
+    function shouldShowRelookup(item) {
+      const title = norm(item.title || "");
+      const mt = norm(item.media_type || "unknown");
+      return title === "unknown book" || title === "unknown item" || mt === "unknown";
+    }
     function shouldShowIgdbEnrich(item) {
       const mt = norm(item.media_type || "unknown");
       if (mt !== "game") return false;
@@ -412,6 +416,30 @@
       const missingCover = isBlank(item.cover_url);
       const missingIgdbId = isBlank(item.igdb_game_id);
       return missingDeveloper || missingYear || missingCover || missingIgdbId;
+    }
+
+    async function doRelookup(id, btn) {
+      const originalText = btn ? btn.textContent : null;
+      try {
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Retrying…";
+        }
+        const resp = await fetch(`/media/${encodeURIComponent(String(id))}/relookup`, { method: "POST" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const data = await resp.json();
+        await load({ preferNetwork: true });
+        if (data.status === "still_unknown") {
+          alert("Still no match found for this barcode.");
+        }
+      } catch (e) {
+        alert("Retry lookup failed: " + e);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = originalText || "Retry lookup";
+        }
+      }
     }
 
     async function doEnrichOmdb(id, btn) {
@@ -483,6 +511,10 @@
           ? `<button class="enrich enrich-igdb" type="button">IGDB</button>`
           : "";
 
+        const relookupBtn = shouldShowRelookup(item)
+          ? `<button class="enrich relookup" type="button">Retry lookup</button>`
+          : "";
+
         div.innerHTML = `
           <div class="title">${escapeHtml(item.title)}</div>
           <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(dev)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}${escapeHtml(director)}</div>
@@ -491,6 +523,7 @@
             <button class="edit" type="button">Edit</button>
             ${omdbBtn}
             ${igdbBtn}
+            ${relookupBtn}
             <button class="del" type="button">Delete</button>
           </div>
         `;
@@ -503,6 +536,9 @@
 
         const igdb = div.querySelector(".enrich-igdb");
         if (igdb) igdb.addEventListener("click", () => doEnrichIgdb(item.id, igdb));
+
+        const relookup = div.querySelector(".relookup");
+        if (relookup) relookup.addEventListener("click", () => doRelookup(item.id, relookup));  
 
         listEl.appendChild(div);
       }

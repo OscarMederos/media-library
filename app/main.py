@@ -485,8 +485,6 @@ def scan_barcode(req: ScanRequest, db: sqlite3.Connection = Depends(get_db)) -> 
     if not normalized:
         raise HTTPException(status_code=400, detail="Empty/invalid barcode")
 
-    db = get_db()
-
     existing = db.execute(MEDIA_SELECT + " WHERE barcode = ?", (normalized,)).fetchone()
     if existing:
         return {

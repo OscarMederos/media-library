@@ -36,6 +36,23 @@ igdb_client: IgdbClient | None = None
 if IGDB_CLIENT_ID and IGDB_CLIENT_SECRET:
     igdb_client = IgdbClient(IgdbConfig(client_id=IGDB_CLIENT_ID, client_secret=IGDB_CLIENT_SECRET))
 
+def _warn_missing_api_keys() -> None:
+    missing = []
+    if not UPCDATABASE_API_KEY:
+        missing.append("UPCDATABASE_API_KEY (UPC/EAN barcode lookups will return 'Unknown Item')")
+    if not OMDB_API_KEY:
+        missing.append("OMDB_API_KEY (movie enrichment via /media/{id}/enrich will fail)")
+    if not (IGDB_CLIENT_ID and IGDB_CLIENT_SECRET):
+        missing.append("IGDB_CLIENT_ID/IGDB_CLIENT_SECRET (game enrichment via /media/{id}/enrich/igdb is disabled)")
+
+    if missing:
+        for reason in missing:
+            logger.warning("Missing configuration: %s", reason)
+    else:
+        logger.info("All optional API keys configured (UPCDatabase, OMDb, IGDB)")
+
+
+_warn_missing_api_keys()
 
 # -----------------------------
 # DB helpers

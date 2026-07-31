@@ -17,7 +17,7 @@ A self-hosted barcode scanner and inventory tracker for books, movies, and games
 - **Self-migrating SQLite schema** — new columns are added automatically at startup (`init_db()`, `ensure_igdb_columns()`).
 
 ## Architecture
-
+```
 ├── app/
 │ ├── main.py # FastAPI app: scan/lookup/CRUD/enrich/report endpoints
 │ ├── igdb_enrich.py # IGDB (Twitch OAuth) client + game enrichment logic
@@ -31,6 +31,7 @@ A self-hosted barcode scanner and inventory tracker for books, movies, and games
 ├── Dockerfile
 ├── docker-compose.yml
 └── .gitignore
+```
 
 The backend is a single FastAPI app backed by SQLite (`DB_PATH`, default `/data/media.db`). Static pages are served at `/ui/*`; the service worker path referenced by the pages is `/ui/sq.js` (ensure `media/sq.js` is copied into `static/` at build time, or adjust the Dockerfile `COPY` step accordingly).
 

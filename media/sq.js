@@ -1,13 +1,14 @@
 /* Service Worker for media-library UI
  *
  * Purpose:
- * - Cache static UI assets under /ui for fast loads + basic offline use
+ * - Cache static UI assets under /ui (network-first, so deploys are picked
+ *   up immediately when online; falls back to cache when offline)
  * - Cache GET /media (network-first with cache fallback) so library page can load when offline
  *
  * NOTE: This service worker intentionally does NOT cache POST /scan.
  */
 
-const CACHE_NAME = "media-library-ui-v3";
+const CACHE_NAME = "media-library-ui-v4";
 
 const PRECACHE_URLS = [
   "/ui/library.html",
@@ -34,15 +35,6 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
-async function cacheFirst(request) {
-  const cached = await caches.match(request);
-  if (cached) return cached;
-  const resp = await fetch(request);
-  const cache = await caches.open(CACHE_NAME);
-  cache.put(request, resp.clone());
-  return resp;
-}
-
 async function networkFirst(request) {
   const cache = await caches.open(CACHE_NAME);
   try {
@@ -67,9 +59,9 @@ self.addEventListener("fetch", (event) => {
   // Only handle same-origin requests
   if (url.origin !== self.location.origin) return;
 
-  // Cache UI assets (cache-first)
+  // Cache UI assets (network-first so deploys take effect immediately when online)
   if (url.pathname.startsWith("/ui/")) {
-    event.respondWith(cacheFirst(req));
+    event.respondWith(networkFirst(req));
     return;
   }
 

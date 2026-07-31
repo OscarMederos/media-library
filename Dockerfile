@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app /app
 COPY static /static
+COPY media/sq.js /static/sq.js
 ENV DB_PATH=/data/media.db
 EXPOSE 8000
 

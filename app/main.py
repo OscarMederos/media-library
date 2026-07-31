@@ -491,20 +491,32 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
     # Store raw title separately so you can clean title later without losing original
     title_raw = title
 
-    cur = db.cursor()
-    cur.execute(
-        """
-        INSERT INTO media (
-          barcode, title, title_raw, media_type,
-          author,
-          source, source_payload
+    try:
+        cur = db.cursor()
+        cur.execute(
+            """
+            INSERT INTO media (
+              barcode, title, title_raw, media_type,
+              author,
+              source, source_payload
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (normalized, title, title_raw, media_type, author, source, source_payload),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (normalized, title, title_raw, media_type, author, source, source_payload),
-    )
-    db.commit()
-    new_id = cur.lastrowid
+        db.commit()
+        new_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        # Lost the race: another request inserted this barcode first.
+        logger.info("Duplicate barcode insert raced, returning existing row: %s", normalized)
+        row = db.execute(MEDIA_SELECT + " WHERE barcode = ?", (normalized,)).fetchone()
+        return {
+            "status": "exists",
+            "input_barcode": input_barcode,
+            "normalized_barcode": normalized,
+            "item": dict(row) if row else None,
+            "db": {"inserted": False, "id": row["id"] if row else None},
+        }
 
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (new_id,)).fetchone()
 
@@ -516,7 +528,6 @@ def scan_barcode(req: ScanRequest) -> dict[str, Any]:
         "lookup": json.loads(lookup_debug) if lookup_debug else None,
         "timing_ms": int((time.time() - t0) * 1000),
     }
-
 
 @app.get("/media")
 def list_media(

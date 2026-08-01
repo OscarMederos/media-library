@@ -1,14 +1,15 @@
 /* Service Worker for media-library UI
  *
  * Purpose:
- * - Cache static UI assets under /ui (network-first, so deploys are picked
- *   up immediately when online; falls back to cache when offline)
+ * - Serve app pages/assets under /ui from the network with the browser's HTTP
+ *   cache explicitly bypassed, so a deploy shows up on the next reload. The SW
+ *   keeps a copy only as an offline fallback and never serves it while online.
  * - Cache GET /media (network-first with cache fallback) so library page can load when offline
  *
  * NOTE: This service worker intentionally does NOT cache POST /scan.
  */
 
-const CACHE_NAME = "media-library-ui-v4";
+const CACHE_NAME = "media-library-ui-v5";
 
 const PRECACHE_URLS = [
   "/ui/library.html",
@@ -50,6 +51,28 @@ async function networkFirst(request) {
   }
 }
 
+// For app pages/assets under /ui: always go to the network with the browser's
+// HTTP cache explicitly bypassed, so a deploy is picked up on the very next
+// reload. We keep a copy in the SW cache ONLY as an offline fallback, and never
+// serve it while the network is reachable.
+async function networkOnlyWithOfflineFallback(request) {
+  const cache = await caches.open(CACHE_NAME);
+  try {
+    // cache:"no-store" forces the SW's own fetch to skip (and not populate) the
+    // browser HTTP cache — without this, a network-first SW can still be handed
+    // a stale copy by the browser cache and never notice a deploy.
+    const resp = await fetch(request, { cache: "no-store" });
+    if (resp && resp.ok) {
+      cache.put(request, resp.clone());
+    }
+    return resp;
+  } catch (e) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw e;
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -59,9 +82,10 @@ self.addEventListener("fetch", (event) => {
   // Only handle same-origin requests
   if (url.origin !== self.location.origin) return;
 
-  // Cache UI assets (network-first so deploys take effect immediately when online)
+  // App pages/assets: network with browser-cache bypassed, so deploys show up
+  // on the next reload. SW cache is used only as an offline fallback.
   if (url.pathname.startsWith("/ui/")) {
-    event.respondWith(networkFirst(req));
+    event.respondWith(networkOnlyWithOfflineFallback(req));
     return;
   }
 

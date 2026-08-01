@@ -961,4 +961,7 @@ def report_missing(
 # -----------------------------
 # Static UI at /ui
 # -----------------------------
-app.mount("/ui", StaticFiles(directory="/static", html=True), name="ui")
+# Directory is configurable so tests/CI (which have no /static) can point this
+# elsewhere; production keeps the /static default set by the Dockerfile.
+STATIC_DIR = os.getenv("STATIC_DIR", "/static")
+app.mount("/ui", StaticFiles(directory=STATIC_DIR, html=True), name="ui")

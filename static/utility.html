@@ -484,8 +484,22 @@
       setBusy(true);
       try {
         log("Loading /media ...");
-        loaded = await apiJson("/media?limit=5000", { method: "GET" });
-        $("loadedCount").textContent = String(Array.isArray(loaded) ? loaded.length : 0);
+        const PAGE_SIZE = 500;
+        let all = [];
+        let offset = 0;
+        let total = Infinity;
+        while (all.length < total) {
+          const page = await apiJson(`/media?limit=${PAGE_SIZE}&offset=${offset}`, { method: "GET" });
+          if (!page || !Array.isArray(page.items) || typeof page.total !== "number") {
+            throw new Error("Unexpected /media response (expected {items, total}).");
+          }
+          if (page.items.length === 0) break; // safety net against an infinite loop
+          all = all.concat(page.items);
+          total = page.total;
+          offset += PAGE_SIZE;
+        }
+        loaded = all;
+        $("loadedCount").textContent = String(loaded.length);
         log(`Loaded ${loaded.length} rows.`, "ok");
         applyScopeAndRefresh();
       } catch (e) {

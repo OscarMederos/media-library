@@ -131,6 +131,11 @@
 
   <div id="list"></div>
 
+  <div id="loadMoreWrap" class="hidden" style="text-align:center; margin-top:1rem;">
+    <div id="pageStatus" class="note" style="margin-bottom:.5rem;"></div>
+    <button id="loadMoreBtn" type="button">Load more</button>
+  </div>
+
   <!-- Edit Modal -->
   <div id="backdrop" class="modalBackdrop" role="dialog" aria-modal="true" aria-label="Edit Item">
     <div class="modal">
@@ -245,7 +250,8 @@
 
   <script>
     // Bump this if you change the cache schema
-    const CACHE_KEY = "mediaLibrary.mediaCache.v6";
+    const CACHE_KEY = "mediaLibrary.mediaCache.v7";
+    const PAGE_SIZE = 100;
 
     const listEl = document.getElementById("list");
     const searchEl = document.getElementById("search");
@@ -254,6 +260,9 @@
     const refreshBtn = document.getElementById("refreshBtn");
     const netEl = document.getElementById("net");
     const cachePill = document.getElementById("cache");
+    const loadMoreWrap = document.getElementById("loadMoreWrap");
+    const loadMoreBtn = document.getElementById("loadMoreBtn");
+    const pageStatus = document.getElementById("pageStatus");
 
     const backdrop = document.getElementById("backdrop");
     const mTitle = document.getElementById("mTitle");
@@ -281,6 +290,7 @@
     const saveBtn = document.getElementById("saveBtn");
 
     let currentItems = [];
+    let totalCount = 0;
     let editingItem = null;
 
     function idEq(a, b) { return String(a) === String(b); }
@@ -546,12 +556,14 @@
 
     function rerender() {
       render(applyFilters(currentItems));
+      updatePaginationUI();
     }
 
-    async function fetchMediaNetwork() {
+    async function fetchMediaNetwork(offset) {
       const params = new URLSearchParams();
       const t = filterEl.value;
-      params.set("limit", "5000");
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
 
       if (t) params.set("media_type", t);
       if (searchEl.value) params.set("search", searchEl.value);
@@ -564,8 +576,27 @@
       const resp = await fetch("/media?" + params.toString());
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       const data = await resp.json();
-      if (!Array.isArray(data)) throw new Error("Unexpected /media response (expected JSON array).");
+      if (!data || !Array.isArray(data.items) || typeof data.total !== "number") {
+        throw new Error("Unexpected /media response (expected {items, total}).");
+      }
       return data;
+    }
+
+    function updatePaginationUI() {
+      const loaded = currentItems.length;
+      if (totalCount > loaded) {
+        loadMoreWrap.classList.remove("hidden");
+        pageStatus.textContent = `Showing ${loaded} of ${totalCount}`;
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.textContent = "Load more";
+      } else if (loaded > 0) {
+        loadMoreWrap.classList.remove("hidden");
+        pageStatus.textContent = `Showing all ${loaded}`;
+        loadMoreBtn.disabled = true;
+        loadMoreBtn.textContent = "Load more";
+      } else {
+        loadMoreWrap.classList.add("hidden");
+      }
     }
 
     async function load({ preferNetwork = true } = {}) {
@@ -574,6 +605,7 @@
       const cached = loadCache();
       if (cached) {
         currentItems = cached;
+        totalCount = cached.length;
         rerender();
       }
 
@@ -583,8 +615,9 @@
       }
 
       try {
-        const items = await fetchMediaNetwork();
+        const { items, total } = await fetchMediaNetwork(0);
         currentItems = items;
+        totalCount = total;
         saveCache(items);
         rerender();
       } catch (e) {
@@ -592,6 +625,22 @@
         if (!cached) {
           showError(`Failed to load /media.\n\n${String(e)}\n\nIf you are offline, try Refresh after reconnecting.`);
         }
+      }
+    }
+
+    async function loadMore() {
+      if (currentItems.length >= totalCount) return;
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.textContent = "Loading…";
+      try {
+        const { items, total } = await fetchMediaNetwork(currentItems.length);
+        currentItems = currentItems.concat(items);
+        totalCount = total;
+        saveCache(currentItems);
+        rerender();
+      } catch (e) {
+        alert("Failed to load more items: " + e);
+        updatePaginationUI();
       }
     }
 
@@ -717,6 +766,7 @@
         if (!resp.ok) throw new Error("HTTP " + resp.status);
 
         currentItems = currentItems.filter(x => !idEq(x.id, id));
+        totalCount = Math.max(0, totalCount - 1);
         saveCache(currentItems);
         rerender();
       } catch (e) {
@@ -731,6 +781,7 @@
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && editingItem) closeEdit(); });
 
     refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
+    loadMoreBtn.addEventListener("click", () => loadMore());
     window.addEventListener("online", () => load({ preferNetwork: true }));
     window.addEventListener("offline", () => updateNet());
 

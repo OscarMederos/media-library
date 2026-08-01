@@ -598,9 +598,10 @@ def list_media(
     author: str | None = Query(None, description="Filter by author (books)"),
     platform: str | None = Query(None, description="Filter by platform (games)"),
     developer: str | None = Query(None, description="Filter by developer (games)"),
-    limit: int = Query(5000, ge=1, le=20000),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: sqlite3.Connection = Depends(get_db),
-) -> list[dict[str, Any]]:
+) -> dict[str, Any]:
 
     where: list[str] = []
     params: list[Any] = []
@@ -626,15 +627,21 @@ def list_media(
     add_like("platform", platform)
     add_like("developer", developer)
 
-    sql = MEDIA_SELECT
+    where_sql = ""
     if where:
-        sql += " WHERE " + " AND ".join(where)
+        where_sql = " WHERE " + " AND ".join(where)
 
-    sql += " ORDER BY added_at DESC, id DESC LIMIT ?"
-    params.append(limit)
+    total = db.execute(f"SELECT COUNT(*) FROM media{where_sql}", params).fetchone()[0]
 
-    rows = db.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
+    sql = MEDIA_SELECT + where_sql + " ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?"
+    rows = db.execute(sql, params + [limit, offset]).fetchall()
+
+    return {
+        "items": [dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @app.get("/media/{item_id}")

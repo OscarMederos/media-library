@@ -217,11 +217,17 @@ def enrich_media_game_from_igdb(
     db,
     igdb: IgdbClient,
     media_id: int,
+    force: bool = False,
     logger: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
     """
     Your chosen behavior:
-      - Fill only if missing (no overwrite).
+      - Fill only if missing (no overwrite) — this policy applies regardless
+        of `force`.
+      - force=True only bypasses the "nothing to do" short-circuit below, so
+        a re-search/re-fetch happens even when igdb_game_id is already set
+        and no fields look missing. It does NOT cause existing values to be
+        overwritten — mirrors omdb_fetch_movie's force semantics in main.py.
       - developer is "all developers joined with ', '"
       - release_year filled from first_release_date (year)
       - cover url updated (cover_url if exists, else igdb_cover_url)
@@ -275,7 +281,7 @@ def enrich_media_game_from_igdb(
     needs_cover_image_id = not _has_value(cur_cover_image_id)
     needs_cover_url = not _has_value(cur_cover_url)
 
-    if not (needs_release_year or needs_developer or needs_cover_image_id or needs_cover_url) and _has_value(cur_igdb_game_id):
+    if not force and not (needs_release_year or needs_developer or needs_cover_image_id or needs_cover_url) and _has_value(cur_igdb_game_id):
         return {"media_id": media_id, "updated": False, "reason": "no missing fields"}
 
     candidates = igdb.search_games(title, limit=5)

@@ -13,7 +13,13 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from igdb_enrich import IgdbClient, IgdbConfig, enrich_media_game_from_igdb, ensure_igdb_columns
+from igdb_enrich import (
+    IgdbClient,
+    IgdbConfig,
+    _is_game_media_type,
+    enrich_media_game_from_igdb,
+    ensure_igdb_columns,
+)
 
 DB_PATH = os.getenv("DB_PATH", "/data/media.db")
 
@@ -59,7 +65,7 @@ def _warn_missing_api_keys() -> None:
     if not OMDB_API_KEY:
         missing.append("OMDB_API_KEY (movie enrichment via /media/{id}/enrich will fail)")
     if not (IGDB_CLIENT_ID and IGDB_CLIENT_SECRET):
-        missing.append("IGDB_CLIENT_ID/IGDB_CLIENT_SECRET (game enrichment via /media/{id}/enrich/igdb is disabled)")
+        missing.append("IGDB_CLIENT_ID/IGDB_CLIENT_SECRET (game enrichment via /media/{id}/enrich is disabled)")
 
     if missing:
         for reason in missing:
@@ -742,20 +748,27 @@ def delete_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict
     return {"status": "deleted", "id": item_id}
 
 
-@app.post("/media/{item_id}/enrich")
-def enrich_media_movie(
-    item_id: int, force: bool = Query(False), db: sqlite3.Connection = Depends(get_db)
+# -----------------------------
+# Unified enrichment
+# -----------------------------
+# Every enrich path returns the same envelope, always with all three keys
+# present (never a conditionally-omitted "reason"):
+#   {"status": "ok" | "not_found" | "skipped" | "error", "reason": str | None, "item": {...full row...}}
+_PROVIDERS = {"omdb", "igdb"}
+
+
+def _infer_provider(media_type: str | None) -> str | None:
+    mt = (media_type or "").strip().lower()
+    if mt == "movie":
+        return "omdb"
+    if _is_game_media_type(mt):
+        return "igdb"
+    return None
+
+
+def _enrich_via_omdb(
+    db: sqlite3.Connection, item: dict[str, Any], item_id: int, force: bool
 ) -> dict[str, Any]:
-    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Not Found")
-
-    item = dict(row)
-    media_type = (item.get("media_type") or "").strip().lower()
-
-    if media_type != "movie":
-        return {"status": "skipped", "reason": "not_movie", "item": item}
-
     if not force and item.get("omdb_status") == "ok" and item.get("omdb_raw_json"):
         return {"status": "skipped", "reason": "already_ok", "item": item}
 
@@ -769,12 +782,13 @@ def enrich_media_movie(
 
     data = omdb_fetch_movie(imdb_id=imdb_id, title=title, year=year_i)
 
-    status = "error"
     if str(data.get("Response", "")).lower() == "true":
         status = "ok"
+        reason = None
     else:
         err = (data.get("Error") or "").strip().lower()
         status = "not_found" if "not found" in err else "error"
+        reason = "omdb_not_found" if status == "not_found" else "omdb_error"
 
     omdb_hash = _sha256_json(data)
     new_imdb = (data.get("imdbID") or "").strip() or imdb_id
@@ -791,7 +805,7 @@ def enrich_media_movie(
         fields.append("omdb_imdb_id = ?")
         params.append(new_imdb)
 
-    # Fill-blanks-only policy for selected display fields
+    # Fill-blanks-only policy for selected display fields (unaffected by force).
     if status == "ok":
         if item.get("release_year") is None:
             y = (data.get("Year") or "").strip()
@@ -818,18 +832,71 @@ def enrich_media_movie(
     db.commit()
 
     row2 = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
-    return {"status": status, "item": dict(row2) if row2 else item}
+    return {"status": status, "reason": reason, "item": dict(row2) if row2 else item}
 
 
-@app.post("/media/{item_id}/enrich/igdb")
-def enrich_media_igdb(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+def _enrich_via_igdb(
+    db: sqlite3.Connection, item: dict[str, Any], item_id: int, force: bool
+) -> dict[str, Any]:
     if igdb_client is None:
         raise HTTPException(status_code=500, detail="IGDB not configured (missing IGDB_CLIENT_ID/IGDB_CLIENT_SECRET)")
+
     try:
-        return enrich_media_game_from_igdb(db=db, igdb=igdb_client, media_id=item_id, logger=logger)
+        result = enrich_media_game_from_igdb(
+            db=db, igdb=igdb_client, media_id=item_id, force=force, logger=logger
+        )
     except Exception as e:
         logger.exception("IGDB enrich failed media_id=%s", item_id)
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+    if result.get("updated"):
+        status, reason = "ok", None
+    else:
+        raw_reason = result.get("reason") or "not_updated"
+        # "no IGDB match" is the provider equivalent of OMDb's not-found; the
+        # rest (missing title, nothing to do) are genuine skips, not misses.
+        status = "not_found" if raw_reason == "no IGDB match" else "skipped"
+        reason = raw_reason
+
+    row2 = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    return {"status": status, "reason": reason, "item": dict(row2) if row2 else item}
+
+
+@app.post("/media/{item_id}/enrich")
+def enrich_media(
+    item_id: int,
+    provider: str | None = Query(
+        None, description="'omdb' or 'igdb'; inferred from the item's media_type if omitted"
+    ),
+    force: bool = Query(False, description="Re-fetch even if already enriched; still fill-blanks-only"),
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    item = dict(row)
+    media_type = (item.get("media_type") or "").strip().lower()
+
+    prov = (provider or "").strip().lower() or None
+    if prov is not None and prov not in _PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown provider '{provider}' (expected 'omdb' or 'igdb')")
+
+    inferred = _infer_provider(media_type)
+    if prov is None:
+        prov = inferred
+    elif inferred is not None and prov != inferred:
+        return {
+            "status": "skipped",
+            "reason": f"provider_mismatch: item media_type is '{media_type or 'unknown'}'",
+            "item": item,
+        }
+
+    if prov is None:
+        return {"status": "skipped", "reason": "no_provider", "item": item}
+    if prov == "omdb":
+        return _enrich_via_omdb(db, item, item_id, force)
+    return _enrich_via_igdb(db, item, item_id, force)
 
 _UNKNOWN_TITLES = {"unknown book", "unknown item"}
 

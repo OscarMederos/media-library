@@ -12,9 +12,8 @@ A self-hosted barcode scanner and inventory tracker for books, movies, and games
   - Movies: OMDb (poster, release year, IMDb ID, full raw JSON stored).
   - Games: IGDB (developer, release year, cover image, IGDB game ID) via Twitch OAuth client-credentials flow.
 - **Retry lookup** — items that failed their initial lookup (stored as "Unknown Book"/"Unknown Item") can be re-looked-up on demand via `POST /media/{id}/relookup` and a "Retry lookup" button in the library UI.
-- **Library UI** (`static/library.html`) — search/filter by type, author, platform, developer; paginated with a "Load more" button; inline edit modal; per-item OMDb/IGDB enrich buttons; offline-capable via `localStorage` cache + service worker.
+- **Library UI** (`static/library.html`) — search/filter by type, author, platform, developer; paginated with a "Load more" button; inline edit modal; per-item OMDb/IGDB enrich buttons.
 - **Reporting dashboard** (`static/utility.html`) — media type breakdown, missing-field charts (author/platform/format/OMDb/IGDB), duplicate barcode detection, CSV export, bulk OMDb/IGDB enrichment with confirmation.
-- **Offline support** via a service worker (`media/sq.js`) that serves UI assets network-first (with an offline cache fallback) and network-first caches `/media`.
 - **Self-migrating SQLite schema** — new columns and indexes are added automatically at startup (`init_db()`, `ensure_igdb_columns()`).
 - **WAL mode** enabled for better read/write concurrency, with a per-connection busy timeout.
 
@@ -30,7 +29,6 @@ A self-hosted barcode scanner and inventory tracker for books, movies, and games
 │   ├── library.html       # browse/search/edit/delete/enrich UI (paginated)
 │   ├── utility.html       # reporting dashboard (Chart.js) + bulk enrich
 │   └── zxing.min.js       # bundled ZXing browser reader
-├── media/sq.js            # PWA service worker (network-first UI + /media caching)
 ├── scripts/
 │   └── backup.sh          # on-demand backup of DB + .env + compose config
 ├── tests/                 # pytest suite (run on the Pi under Python 3.11)

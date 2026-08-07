@@ -44,10 +44,9 @@ async def no_cache_ui_assets(request, call_next):
     """
     /ui/* is served via StaticFiles, which sets Last-Modified/ETag but no
     Cache-Control. Without an explicit Cache-Control, browsers are allowed to
-    heuristically cache these pages and skip the network entirely on reload —
-    which silently defeats the service worker's network-first strategy, since
-    its fetch() call gets satisfied by the browser's own HTTP cache before it
-    ever reaches this server. Forcing no-store closes that gap.
+    heuristically cache these pages and skip the network entirely on reload,
+    so a deploy wouldn't show up until the browser's own cache expired.
+    Forcing no-store means every request for /ui/* always hits this server.
     """
     response = await call_next(request)
     if request.url.path.startswith("/ui/"):

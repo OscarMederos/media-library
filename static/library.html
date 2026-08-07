@@ -113,7 +113,7 @@
 </head>
 
 <body>
-  <h2>📚 My Library <span id="net" class="pill">…</span> <span id="cache" class="pill">cache: 0</span></h2>
+  <h2>📚 My Library <span id="net" class="pill">…</span></h2>
 
   <div class="top">
     <input id="search" type="search" placeholder="Search title…" />
@@ -249,8 +249,6 @@
   </div>
 
   <script>
-    // Bump this if you change the cache schema
-    const CACHE_KEY = "mediaLibrary.mediaCache.v8";
     const PAGE_SIZE = 100;
 
     const listEl = document.getElementById("list");
@@ -259,7 +257,6 @@
     const filterEl = document.getElementById("filter");
     const refreshBtn = document.getElementById("refreshBtn");
     const netEl = document.getElementById("net");
-    const cachePill = document.getElementById("cache");
     const loadMoreWrap = document.getElementById("loadMoreWrap");
     const loadMoreBtn = document.getElementById("loadMoreBtn");
     const pageStatus = document.getElementById("pageStatus");
@@ -301,28 +298,6 @@
 
     function showError(message) {
       listEl.innerHTML = `<div class="errorBox">${escapeHtml(message)}</div>`;
-    }
-
-    function saveCache(items, total) {
-      try {
-        localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), items, total }));
-        cachePill.textContent = `cache: ${items.length}`;
-      } catch {}
-    }
-
-    function loadCache() {
-      try {
-        const raw = localStorage.getItem(CACHE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed || !Array.isArray(parsed.items)) return null;
-        cachePill.textContent = `cache: ${parsed.items.length}`;
-        // total wasn't stored in older cache versions; fall back to items.length rather than throw
-        const total = typeof parsed.total === "number" ? parsed.total : parsed.items.length;
-        return { items: parsed.items, total, ts: parsed.ts || null };
-      } catch {
-        return null;
-      }
     }
 
     function escapeHtml(s) {
@@ -440,7 +415,7 @@
         const resp = await fetch(`/media/${encodeURIComponent(String(id))}/relookup`, { method: "POST" });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
-        await load({ preferNetwork: true });
+        await load();
         if (data.status === "still_unknown") {
           alert("Still no match found for this barcode.");
         }
@@ -476,7 +451,7 @@
           alert(`${label} failed: ${data.reason || "unknown error"}`);
         }
 
-        await load({ preferNetwork: true });
+        await load();
       } catch (e) {
         alert(`${label} failed: ` + e);
       } finally {
@@ -597,18 +572,11 @@
       }
     }
 
-    async function load({ preferNetwork = true } = {}) {
+    async function load() {
       updateNet();
 
-      const cached = loadCache();
-      if (cached) {
-        currentItems = cached.items;
-        totalCount = cached.total;
-        rerender();
-      }
-
-      if (!preferNetwork || !navigator.onLine) {
-        if (!cached) rerender();
+      if (!navigator.onLine) {
+        showError("You're offline — reconnect to load the library.");
         return;
       }
 
@@ -616,17 +584,10 @@
         const { items, total } = await fetchMediaNetwork(0);
         currentItems = items;
         totalCount = total;
-        saveCache(items, total);
         rerender();
       } catch (e) {
         console.log("load failed:", e);
-        if (!cached) {
-          showError(`Failed to load /media.\n\n${String(e)}\n\nIf you are offline, try Refresh after reconnecting.`);
-        } else {
-          // We have something to show, but it's a stale snapshot, not live data — say so rather than staying silent.
-          const when = cached.ts ? new Date(cached.ts).toLocaleTimeString() : "an earlier visit";
-          pageStatus.textContent = `Showing ${currentItems.length} of ${totalCount} (offline — last refreshed ${when}, data may be stale)`;
-        }
+        showError(`Failed to load /media.\n\n${String(e)}`);
       }
     }
 
@@ -638,7 +599,6 @@
         const { items, total } = await fetchMediaNetwork(currentItems.length);
         currentItems = currentItems.concat(items);
         totalCount = total;
-        saveCache(currentItems, totalCount);
         rerender();
       } catch (e) {
         alert("Failed to load more items: " + e);
@@ -750,7 +710,6 @@
         if (!updated) throw new Error("Unexpected PATCH response (missing item).");
 
         currentItems = currentItems.map(x => idEq(x.id, updated.id) ? updated : x);
-        saveCache(currentItems, totalCount);
         rerender();
         closeEdit();
       } catch (e) {
@@ -769,7 +728,6 @@
 
         currentItems = currentItems.filter(x => !idEq(x.id, id));
         totalCount = Math.max(0, totalCount - 1);
-        saveCache(currentItems, totalCount);
         rerender();
       } catch (e) {
         alert("Delete failed: " + e);
@@ -782,41 +740,53 @@
     backdrop.addEventListener("click", (e) => { if (e.target === backdrop) closeEdit(); });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && editingItem) closeEdit(); });
 
-    refreshBtn.addEventListener("click", () => load({ preferNetwork: true }));
+    refreshBtn.addEventListener("click", () => load());
     loadMoreBtn.addEventListener("click", () => loadMore());
-    window.addEventListener("online", () => load({ preferNetwork: true }));
+    window.addEventListener("online", () => load());
     window.addEventListener("offline", () => updateNet());
 
     // Keep it simple: rerender locally when offline, otherwise refresh from server.
     searchEl.addEventListener("input", () => {
-      if (navigator.onLine) load({ preferNetwork: true });
+      if (navigator.onLine) load();
       else rerender();
     });
 
     extraEl.addEventListener("input", () => {
-      if (navigator.onLine) load({ preferNetwork: true });
+      if (navigator.onLine) load();
       else rerender();
     });
 
     filterEl.addEventListener("change", () => {
       updateExtraUI();
-      load({ preferNetwork: true });
+      load();
     });
 
     mType.addEventListener("change", updateModalVisibility);
 
-    // service worker (optional): sq.js is a service worker in this app
-    (function registerSW() {
+    // Earlier versions of this app installed a service worker (media/sq.js)
+    // and cached the media list in localStorage. Both are gone now — this
+    // unregisters any leftover SW and clears any old cache data still sitting
+    // on a returning device, so old devices self-heal instead of needing a
+    // manual "clear site data" like previous deploys required.
+    (function cleanupLegacyCaching() {
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register("/ui/sq.js").catch(() => {});
+        navigator.serviceWorker.getRegistrations()
+          .then(regs => regs.forEach(r => r.unregister()))
+          .catch(() => {});
       }
+      if ("caches" in window) {
+        caches.keys()
+          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+          .catch(() => {});
+      }
+      try { localStorage.removeItem("mediaLibrary.mediaCache.v8"); } catch {}
     })();
 
     // Boot
     try {
       updateExtraUI();
       updateNet();
-      load({ preferNetwork: true });
+      load();
     } catch (e) {
       console.log("init failed:", e);
       showError("Library UI failed to initialize.\n\n" + String(e));

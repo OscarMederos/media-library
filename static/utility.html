@@ -778,24 +778,31 @@
       }
       applyScopeAndRefresh();
 
+      const mode = bulkMode();
+      const gameRows = scoped.filter(isGame);
+
       // Validation rules:
       // - games only
       // - must have a title (IGDB search depends on it)
-      // - target rows that haven't been enriched yet (missing igdb_game_id or igdb_last_enriched_at)
-      const gameRows = scoped.filter(isGame);
-      const candidates = gameRows.filter(r =>
-        !isEmpty(r.title) && (isEmpty(r.igdb_game_id) || isEmpty(r.igdb_last_enriched_at))
-      );
+      // - fill mode targets rows not yet enriched (missing igdb_game_id or igdb_last_enriched_at)
+      // - force mode targets all games with a title
+      //
+      // The bulk-mode toggle previously had no effect here — the backend's IGDB
+      // path ignored force entirely. Now that /media/{id}/enrich accepts force
+      // for both providers, this actually does something.
+      const candidates = (mode === "force")
+        ? gameRows.filter(r => !isEmpty(r.title))
+        : gameRows.filter(r => !isEmpty(r.title) && (isEmpty(r.igdb_game_id) || isEmpty(r.igdb_last_enriched_at)));
 
       if (!(await bulkConfirm("Bulk IGDB enrichment", candidates))) {
         log("Bulk IGDB enrichment cancelled.", "warn");
         return;
       }
 
-      // Mode currently doesn't change the IGDB endpoint behavior; it's surfaced for consistency with OMDb.
+      const forceQ = mode === "force" ? "true" : "false";
       await bulkRun(
         candidates,
-        async (r) => apiJson(`/media/${encodeURIComponent(String(r.id))}/enrich/igdb`, { method: "POST" }),
+        async (r) => apiJson(`/media/${encodeURIComponent(String(r.id))}/enrich?provider=igdb&force=${forceQ}`, { method: "POST" }),
         "IGDB bulk enrich"
       );
     }
@@ -830,7 +837,7 @@
       const forceQ = mode === "force" ? "true" : "false";
       await bulkRun(
         candidates,
-        async (r) => apiJson(`/media/${encodeURIComponent(String(r.id))}/enrich?force=${forceQ}`, { method: "POST" }),
+        async (r) => apiJson(`/media/${encodeURIComponent(String(r.id))}/enrich?provider=omdb&force=${forceQ}`, { method: "POST" }),
         "OMDb bulk enrich"
       );
     }

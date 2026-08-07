@@ -454,45 +454,41 @@
       }
     }
 
-    async function doEnrichOmdb(id, btn) {
+    // Single handler for both providers now that the backend returns one
+    // consistent envelope: {status, reason, item}. status is "ok" | "not_found"
+    // | "skipped" | "error"; reason is always present (null on success).
+    async function doEnrich(id, btn, provider, label) {
       const originalText = btn ? btn.textContent : null;
       try {
         if (btn) {
           btn.disabled = true;
           btn.textContent = "Enriching…";
         }
-        const resp = await fetch(`/media/${encodeURIComponent(String(id))}/enrich`, { method: "POST" });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const resp = await fetch(`/media/${encodeURIComponent(String(id))}/enrich?provider=${provider}`, { method: "POST" });
+        const data = await resp.json().catch(() => null);
+        if (!resp.ok) throw new Error(data?.detail || "HTTP " + resp.status);
+
+        if (data?.status === "not_found") {
+          alert(`${label}: no match found for this item.`);
+        } else if (data?.status === "skipped") {
+          alert(`${label}: skipped (${data.reason || "n/a"}).`);
+        } else if (data?.status === "error") {
+          alert(`${label} failed: ${data.reason || "unknown error"}`);
+        }
+
         await load({ preferNetwork: true });
       } catch (e) {
-        alert("OMDb enrich failed: " + e);
+        alert(`${label} failed: ` + e);
       } finally {
         if (btn) {
           btn.disabled = false;
-          btn.textContent = originalText || "OMDb";
+          btn.textContent = originalText || label;
         }
       }
     }
 
-    async function doEnrichIgdb(id, btn) {
-      const originalText = btn ? btn.textContent : null;
-      try {
-        if (btn) {
-          btn.disabled = true;
-          btn.textContent = "Enriching…";
-        }
-        const resp = await fetch(`/media/${encodeURIComponent(String(id))}/enrich/igdb`, { method: "POST" });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        await load({ preferNetwork: true });
-      } catch (e) {
-        alert("IGDB enrich failed: " + e);
-      } finally {
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = originalText || "IGDB";
-        }
-      }
-    }
+    function doEnrichOmdb(id, btn) { return doEnrich(id, btn, "omdb", "OMDb"); }
+    function doEnrichIgdb(id, btn) { return doEnrich(id, btn, "igdb", "IGDB"); }
 
     function render(items) {
       listEl.innerHTML = "";

@@ -298,39 +298,40 @@
       }
     }
 
-    async function doOmdbEnrich() {
+    // Single handler for both providers now that the backend returns one
+    // consistent envelope: {status, reason, item}. status is "ok" | "not_found"
+    // | "skipped" | "error"; reason is always present (null on success).
+    async function doEnrich(provider, btn, label) {
       if (!lastItem?.id) return;
-      enrichOmdbBtn.disabled = true;
-      enrichOmdbBtn.textContent = "Enriching…";
+      btn.disabled = true;
+      btn.textContent = "Enriching…";
 
       try {
-        const r = await fetch(`/media/${lastItem.id}/enrich`, { method: "POST" });
-        if (!r.ok) throw new Error("HTTP " + r.status);
+        const r = await fetch(`/media/${lastItem.id}/enrich?provider=${provider}`, { method: "POST" });
+        const data = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+        if (data?.status === "not_found") {
+          setError(`${label}: no match found`);
+        } else if (data?.status === "skipped") {
+          setError(`${label}: skipped (${data.reason || "n/a"})`);
+        } else if (data?.status === "error") {
+          setError(`${label} failed: ${data.reason || "unknown error"}`);
+        } else {
+          setError("");
+        }
+
         await refreshItem(lastItem.id, { normalized_barcode: lastItem.barcode });
       } catch (e) {
-        setError("OMDb enrich failed: " + e);
+        setError(`${label} failed: ` + e);
       } finally {
-        enrichOmdbBtn.disabled = false;
-        enrichOmdbBtn.textContent = "Enrich OMDb";
+        btn.disabled = false;
+        btn.textContent = label;
       }
     }
 
-    async function doIgdbEnrich() {
-      if (!lastItem?.id) return;
-      enrichIgdbBtn.disabled = true;
-      enrichIgdbBtn.textContent = "Enriching…";
-
-      try {
-        const r = await fetch(`/media/${lastItem.id}/enrich/igdb`, { method: "POST" });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        await refreshItem(lastItem.id, { normalized_barcode: lastItem.barcode });
-      } catch (e) {
-        setError("IGDB enrich failed: " + e);
-      } finally {
-        enrichIgdbBtn.disabled = false;
-        enrichIgdbBtn.textContent = "Enrich IGDB";
-      }
-    }
+    function doOmdbEnrich() { return doEnrich("omdb", enrichOmdbBtn, "Enrich OMDb"); }
+    function doIgdbEnrich() { return doEnrich("igdb", enrichIgdbBtn, "Enrich IGDB"); }
 
     async function startCamera() {
       setError("");

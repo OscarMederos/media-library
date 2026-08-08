@@ -6,6 +6,7 @@ import logging
 import os
 import sqlite3
 import time
+import uuid
 from typing import Any
 
 import requests
@@ -214,6 +215,20 @@ FROM media
 # -----------------------------
 class ScanRequest(BaseModel):
     barcode: str
+
+
+class ManualCreate(BaseModel):
+    title: str
+    media_type: str  # "book" | "movie" | "game"
+
+    author: str | None = None
+    platform: str | None = None
+    format: str | None = None
+    location: str | None = None
+    status: str | None = None
+    release_year: int | None = None
+    cover_url: str | None = None
+    notes: str | None = None
 
 
 class MediaUpdate(BaseModel):
@@ -611,6 +626,58 @@ def scan_barcode(req: ScanRequest, db: sqlite3.Connection = Depends(get_db)) -> 
         "timing_ms": int((time.time() - t0) * 1000),
     }
 
+
+_MANUAL_MEDIA_TYPES = {"book", "movie", "game"}
+
+
+@app.post("/media/manual")
+def create_media_manual(req: ManualCreate, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    """
+    Adds an item with no barcode (out-of-print books, homemade/promo items,
+    anything a scan can't identify). Gets a synthetic barcode so the existing
+    UNIQUE NOT NULL constraint and duplicate-scan logic don't need to change;
+    the "MANUAL-" prefix guarantees it can never collide with a real scanned
+    barcode (which is always pure digits) and source="manual" tells /relookup
+    to skip it rather than run metadata lookup against a fake barcode.
+    """
+    title = (req.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+
+    media_type = (req.media_type or "").strip().lower()
+    if media_type not in _MANUAL_MEDIA_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"media_type must be one of: {', '.join(sorted(_MANUAL_MEDIA_TYPES))}",
+        )
+
+    barcode = f"MANUAL-{uuid.uuid4().hex[:12].upper()}"
+
+    cur = db.cursor()
+    cur.execute(
+        """
+        INSERT INTO media (
+          barcode, title, title_raw, media_type,
+          author, platform, format, location, status, release_year, cover_url, notes,
+          source
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            barcode, title, title, media_type,
+            (req.author or None), (req.platform or None), (req.format or None),
+            (req.location or None), (req.status or None), req.release_year,
+            (req.cover_url or None), (req.notes or None),
+            "manual",
+        ),
+    )
+    db.commit()
+    new_id = cur.lastrowid
+
+    row = db.execute(MEDIA_SELECT + " WHERE id = ?", (new_id,)).fetchone()
+    return {"status": "inserted", "item": dict(row) if row else {"id": new_id}}
+
+
 @app.get("/media")
 def list_media(
     q: str | None = Query(None, description="Search title/title_raw/barcode (alias of 'search')"),
@@ -913,6 +980,10 @@ def relookup_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> di
         raise HTTPException(status_code=404, detail="Not Found")
 
     item = dict(row)
+
+    if (item.get("source") or "") == "manual":
+        raise HTTPException(status_code=400, detail="Item was added manually and has no barcode to look up")
+
     barcode = (item.get("barcode") or "").strip()
     if not barcode:
         raise HTTPException(status_code=400, detail="Item has no barcode to look up")

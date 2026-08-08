@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Add Item Manually</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #fff;
+      padding: 1rem;
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    h2 { text-align: center; }
+
+    .row {
+      display: flex;
+      gap: .5rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: .75rem;
+    }
+    button {
+      font-size: 1.05rem;
+      padding: .7rem 1rem;
+      border-radius: 10px;
+      border: 0;
+      cursor: pointer;
+    }
+    #library { background: #1e88e5; color: #fff; }
+    #submitBtn { background: #4caf50; color: #000; }
+    #resetBtn { background: #444; color: #fff; }
+    button:disabled { opacity: .6; cursor: default; }
+
+    .card {
+      background: #1c1c1c;
+      padding: 1rem;
+      border-radius: 12px;
+      margin: 1rem auto 0;
+      text-align: left;
+    }
+
+    label {
+      display: block;
+      font-weight: 650;
+      margin-top: .9rem;
+      margin-bottom: .3rem;
+    }
+    label .opt { font-weight: 400; color: #aaa; font-size: .85rem; }
+
+    input, select, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      font-size: 1rem;
+      padding: .55rem .6rem;
+      border-radius: 8px;
+      border: 1px solid #333;
+      background: #0c0c0c;
+      color: #fff;
+    }
+    textarea { min-height: 4.5rem; resize: vertical; }
+
+    .muted { color: #aaa; }
+    .ok { color: #8bc34a; }
+    .err { color: #ef5350; }
+
+    .actions {
+      margin-top: 1.2rem;
+      display: flex;
+      gap: .6rem;
+      flex-wrap: wrap;
+    }
+    .actions button { flex: 1; min-width: 140px; }
+
+    .hidden { display: none !important; }
+  </style>
+</head>
+
+<body>
+  <h2>➕ Add Item Manually</h2>
+
+  <div class="row">
+    <button id="library" onclick="location.href='/ui/library.html'">View Library</button>
+  </div>
+
+  <div class="card">
+    <div class="muted" style="margin-bottom:.5rem;">
+      For items with no barcode to scan — out-of-print books, homemade or promo items, anything a scan can't identify.
+    </div>
+
+    <form id="addForm">
+      <label for="title">Title <span class="opt">(required)</span></label>
+      <input id="title" name="title" type="text" required autocomplete="off" />
+
+      <label for="mediaType">Type <span class="opt">(required)</span></label>
+      <select id="mediaType" name="media_type" required>
+        <option value="">Select…</option>
+        <option value="book">Book</option>
+        <option value="movie">Movie</option>
+        <option value="game">Game</option>
+      </select>
+
+      <label for="author">Author <span class="opt">(books)</span></label>
+      <input id="author" name="author" type="text" autocomplete="off" />
+
+      <label for="platform">Platform <span class="opt">(games)</span></label>
+      <input id="platform" name="platform" type="text" autocomplete="off" placeholder="e.g. PS5, Switch" />
+
+      <label for="format">Format <span class="opt">optional</span></label>
+      <input id="format" name="format" type="text" autocomplete="off" placeholder="e.g. Hardcover, DVD, Cartridge" />
+
+      <label for="releaseYear">Release year <span class="opt">optional</span></label>
+      <input id="releaseYear" name="release_year" type="number" min="0" step="1" inputmode="numeric" />
+
+      <label for="location">Location <span class="opt">optional</span></label>
+      <input id="location" name="location" type="text" autocomplete="off" placeholder="e.g. Attic Box 3" />
+
+      <label for="status">Status <span class="opt">optional</span></label>
+      <input id="status" name="status" type="text" autocomplete="off" />
+
+      <label for="coverUrl">Cover image URL <span class="opt">optional</span></label>
+      <input id="coverUrl" name="cover_url" type="url" autocomplete="off" placeholder="https://…" />
+
+      <label for="notes">Notes <span class="opt">optional</span></label>
+      <textarea id="notes" name="notes"></textarea>
+
+      <div class="actions">
+        <button id="submitBtn" type="submit">Add Item</button>
+        <button id="resetBtn" type="button">Reset</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div id="resultMsg" class="muted">—</div>
+  </div>
+
+  <script>
+    const form = document.getElementById("addForm");
+    const submitBtn = document.getElementById("submitBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const resultMsg = document.getElementById("resultMsg");
+
+    function setResult(text, cls) {
+      resultMsg.textContent = text;
+      resultMsg.className = cls || "muted";
+    }
+
+    function fieldOrNull(id) {
+      const v = document.getElementById(id).value.trim();
+      return v === "" ? null : v;
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const title = fieldOrNull("title");
+      const mediaType = document.getElementById("mediaType").value;
+
+      if (!title) {
+        setResult("Title is required.", "err");
+        return;
+      }
+      if (!mediaType) {
+        setResult("Type is required.", "err");
+        return;
+      }
+
+      const yearRaw = fieldOrNull("releaseYear");
+      let releaseYear = null;
+      if (yearRaw !== null) {
+        const n = parseInt(yearRaw, 10);
+        if (Number.isNaN(n)) {
+          setResult("Release year must be a number.", "err");
+          return;
+        }
+        releaseYear = n;
+      }
+
+      const payload = {
+        title,
+        media_type: mediaType,
+        author: fieldOrNull("author"),
+        platform: fieldOrNull("platform"),
+        format: fieldOrNull("format"),
+        location: fieldOrNull("location"),
+        status: fieldOrNull("status"),
+        release_year: releaseYear,
+        cover_url: fieldOrNull("coverUrl"),
+        notes: fieldOrNull("notes"),
+      };
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Adding…";
+      setResult("Adding…", "muted");
+
+      try {
+        const r = await fetch("/media/manual", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json().catch(() => null);
+
+        if (!r.ok) {
+          throw new Error(data?.detail || `HTTP ${r.status}`);
+        }
+
+        const item = data?.item;
+        setResult(`Added: "${item?.title ?? title}" (id ${item?.id ?? "?"})`, "ok");
+        form.reset();
+        document.getElementById("title").focus();
+      } catch (err) {
+        setResult(`Failed to add item: ${err}`, "err");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Add Item";
+      }
+    });
+
+    resetBtn.addEventListener("click", () => {
+      form.reset();
+      setResult("—", "muted");
+    });
+
+    // Earlier versions of this app installed a service worker (media/sq.js).
+    // It's gone now — this unregisters any leftover copy still active on a
+    // returning device, so old devices self-heal instead of needing a manual
+    // "clear site data".
+    (function cleanupLegacyServiceWorker() {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.getRegistrations()
+          .then(regs => regs.forEach(r => r.unregister()))
+          .catch(() => {});
+      }
+      if ("caches" in window) {
+        caches.keys()
+          .then(keys => Promise.all(keys.map(k => caches.delete(k))))
+          .catch(() => {});
+      }
+    })();
+  </script>
+</body>
+</html>

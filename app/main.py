@@ -732,6 +732,16 @@ def list_media(
     }
 
 
+# Must be declared before /media/{item_id} — otherwise "random" would be
+# routed there and rejected as an invalid int item_id.
+@app.get("/media/random")
+def random_media(db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
+    row = db.execute(MEDIA_SELECT + " ORDER BY RANDOM() LIMIT 1").fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Library is empty")
+    return {"item": dict(row)}
+
+
 @app.get("/media/{item_id}")
 def get_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict[str, Any]:
     row = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()

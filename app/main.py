@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -529,36 +530,165 @@ def _is_blank(v: Any) -> bool:
     return v is None or (isinstance(v, str) and not v.strip())
 
 
-def omdb_fetch_movie(*, imdb_id: str | None, title: str | None, year: int | None) -> dict[str, Any]:
-    if not OMDB_API_KEY:
-        raise HTTPException(status_code=500, detail="OMDB_API_KEY not set")
+_OMDB_TITLE_NOISE = re.compile(
+    r"\b("
+    r"dvd|blu[\s-]?ray|bluray|4k|uhd|ultra\s?hd|vhs|digital\s?copy|steelbook|"
+    r"widescreen|full\s?screen|fullscreen|remastered|"
+    r"(?:special|collector\'?s|deluxe|limited|anniversary|extended|unrated|director\'?s)"
+    r"\s+(?:edition|cut)|"
+    r"\d+\s*-?\s*disc(?:\s+set)?"
+    r")\b",
+    re.IGNORECASE,
+)
 
-    params: dict[str, Any] = {"apikey": OMDB_API_KEY, "type": "movie", "r": "json", "plot": "short"}
+_PLACEHOLDER_TITLES = {"unknown item", "unknown", ""}
 
-    if imdb_id:
-        params["i"] = imdb_id
-    else:
-        if not title or not title.strip():
-            raise HTTPException(status_code=400, detail="No title available for OMDb lookup")
-        params["t"] = title.strip()
-        if year:
-            params["y"] = int(year)
 
+def _clean_movie_title(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    s = re.sub(r"[\(\[\{][^\)\]\}]*[\)\]\}]", " ", str(raw))
+    s = _OMDB_TITLE_NOISE.sub(" ", s)
+    s = " ".join(s.split()).strip(" -\u2013\u2014:,.")
+    return s or None
+
+
+def _title_candidates(*titles: str | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in titles:
+        for cand in (raw, _clean_movie_title(raw)):
+            if not cand:
+                continue
+            c = " ".join(str(cand).split())
+            key = c.lower()
+            if not c or key in seen or key in _PLACEHOLDER_TITLES:
+                continue
+            seen.add(key)
+            out.append(c)
+    return out
+
+
+def _omdb_request(params: dict[str, Any]) -> dict[str, Any]:
     try:
         r = requests.get(
             OMDB_BASE_URL,
-            params=params,
+            params={**params, "apikey": OMDB_API_KEY, "r": "json"},
             timeout=10,
             headers={"User-Agent": "media-library/1.0"},
         )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"OMDb request failed: {e}")
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"OMDb request failed: {e}") from e
 
     if not r.ok:
         raise HTTPException(status_code=502, detail=f"OMDb HTTP {r.status_code}")
 
-    data = r.json() or {}
-    return data
+    try:
+        return r.json() or {}
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"OMDb returned non-JSON: {e}") from e
+
+
+def _omdb_ok(data: dict[str, Any]) -> bool:
+    return str(data.get("Response", "")).lower() == "true"
+
+
+def _pick_search_result(results: list[dict[str, Any]], year: int | None) -> dict[str, Any]:
+    if year:
+        for r in results:
+            ry = str(r.get("Year") or "")[:4]
+            if ry.isdigit() and int(ry) == int(year):
+                return r
+    return results[0]
+
+
+def omdb_fetch_movie(
+    *,
+    imdb_id: str | None,
+    title: str | None,
+    year: int | None,
+    title_raw: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Resolve a title against OMDb, widening the query one constraint at a time:
+      1. imdb_id (exact)
+      2. exact title (?t=), narrowest first: +year +type=movie -> +year -> +type -> bare
+      3. cleaned title variants, same ladder
+      4. fuzzy search (?s=), movie-typed then untyped -> best imdbID -> exact fetch
+
+    type=movie is tried first for precision, then dropped: OMDb classifies
+    documentaries, mini-series and box sets as "series", and the type filter
+    makes those return "Movie not found!" despite an exact title match.
+
+    Returns (omdb_payload, debug) where debug records every attempt.
+    """
+    if not OMDB_API_KEY:
+        raise HTTPException(status_code=500, detail="OMDB_API_KEY not set")
+
+    attempts: list[dict[str, Any]] = []
+    last: dict[str, Any] | None = None
+
+    if imdb_id:
+        data = _omdb_request({"i": imdb_id, "plot": "short"})
+        attempts.append({"strategy": "imdb_id", "value": imdb_id, "ok": _omdb_ok(data)})
+        if _omdb_ok(data):
+            return data, {"attempts": attempts}
+        last = data
+
+    candidates = _title_candidates(title, title_raw)
+    if not candidates:
+        raise HTTPException(
+            status_code=400,
+            detail="No usable title available for OMDb lookup (empty or placeholder)",
+        )
+
+    years: list[int | None] = [year, None] if year else [None]
+    types: list[str | None] = ["movie", None]
+
+    for cand in candidates:
+        for y in years:
+            for t in types:
+                params: dict[str, Any] = {"t": cand, "plot": "short"}
+                if y:
+                    params["y"] = int(y)
+                if t:
+                    params["type"] = t
+                data = _omdb_request(params)
+                attempts.append({
+                    "strategy": "title", "value": cand, "year": y, "type": t,
+                    "ok": _omdb_ok(data), "error": data.get("Error"),
+                })
+                if _omdb_ok(data):
+                    return data, {"attempts": attempts}
+                last = data
+
+    for cand in candidates:
+        for t in types:
+            params = {"s": cand}
+            if t:
+                params["type"] = t
+            search = _omdb_request(params)
+            results = search.get("Search") or []
+            attempts.append({
+                "strategy": "search", "value": cand, "type": t, "ok": _omdb_ok(search),
+                "results": len(results), "error": search.get("Error"),
+            })
+            if not (_omdb_ok(search) and results):
+                continue
+
+            best_id = (_pick_search_result(results, year).get("imdbID") or "").strip()
+            if not best_id:
+                continue
+
+            data = _omdb_request({"i": best_id, "plot": "short"})
+            attempts.append({
+                "strategy": "search_imdb_id", "value": best_id, "ok": _omdb_ok(data)
+            })
+            if _omdb_ok(data):
+                return data, {"attempts": attempts}
+            last = data
+
+    return (last or {"Response": "False", "Error": "Movie not found!"}), {"attempts": attempts}
 
 
 # -----------------------------
@@ -839,14 +969,17 @@ def _enrich_via_omdb(
         return {"status": "skipped", "reason": "already_ok", "item": item}
 
     imdb_id = (item.get("omdb_imdb_id") or "").strip() or None
-    title = (item.get("title_raw") or item.get("title") or "").strip() or None
+    title = (item.get("title") or "").strip() or None
+    title_raw = (item.get("title_raw") or "").strip() or None
     year = item.get("release_year")
     try:
         year_i = int(year) if year is not None else None
     except Exception:
         year_i = None
 
-    data = omdb_fetch_movie(imdb_id=imdb_id, title=title, year=year_i)
+    data, omdb_debug = omdb_fetch_movie(
+        imdb_id=imdb_id, title=title, year=year_i, title_raw=title_raw
+    )
 
     if str(data.get("Response", "")).lower() == "true":
         status = "ok"
@@ -897,8 +1030,16 @@ def _enrich_via_omdb(
     db.execute(query, params)
     db.commit()
 
+    if status != "ok":
+        logger.info(
+            "OMDb unresolved media_id=%s attempts=%s", item_id, omdb_debug["attempts"]
+        )
+
     row2 = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
-    return {"status": status, "reason": reason, "item": dict(row2) if row2 else item}
+    result: dict[str, Any] = {"status": status, "reason": reason, "item": dict(row2) if row2 else item}
+    if status != "ok":
+        result["omdb_debug"] = omdb_debug
+    return result
 
 
 def _enrich_via_igdb(

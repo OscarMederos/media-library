@@ -122,6 +122,7 @@
       <option value="">All types</option>
       <option value="book">Books</option>
       <option value="movie">Movies</option>
+      <option value="series">Series / TV</option>
       <option value="game">Games</option>
       <option value="unknown">Unknown</option>
     </select>
@@ -153,6 +154,7 @@
             <select id="mType">
               <option value="book">book</option>
               <option value="movie">movie</option>
+              <option value="series">series</option>
               <option value="game">game</option>
               <option value="unknown">unknown</option>
             </select>
@@ -372,9 +374,12 @@
       return item._omdbParsed;
     }
 
+    // OMDb covers films and episodic titles alike.
+    function isOmdbType(mt) { return mt === "movie" || mt === "series"; }
+
     function getDirectorDisplay(item) {
       const mt = norm(item.media_type || "unknown");
-      if (mt !== "movie") return "";
+      if (!isOmdbType(mt)) return "";
       const omdb = getOmdb(item);
       const dir = (omdb && typeof omdb.Director === "string") ? omdb.Director.trim() : "";
       if (!dir || dir.toUpperCase() === "N/A") return "";
@@ -383,7 +388,7 @@
 
     function shouldShowOmdbEnrich(item) {
       const mt = norm(item.media_type || "unknown");
-      if (mt !== "movie") return false;
+      if (!isOmdbType(mt)) return false;
       const status = norm(item.omdb_status || "");
       return status !== "ok";
     }

@@ -220,7 +220,7 @@ class ScanRequest(BaseModel):
 
 class ManualCreate(BaseModel):
     title: str
-    media_type: str  # "book" | "movie" | "game"
+    media_type: str  # "book" | "movie" | "series" | "game"
 
     author: str | None = None
     platform: str | None = None
@@ -250,6 +250,8 @@ class MediaUpdate(BaseModel):
     igdb_game_id: int | None = None
     igdb_cover_image_id: int | None = None
     igdb_last_enriched_at: str | None = None
+
+    omdb_imdb_id: str | None = None
 
     notes: str | None = None
 
@@ -530,10 +532,12 @@ def _is_blank(v: Any) -> bool:
     return v is None or (isinstance(v, str) and not v.strip())
 
 
+# Retail/packaging noise that appears on scanned or hand-typed titles but never
+# in OMDb's canonical title.
 _OMDB_TITLE_NOISE = re.compile(
     r"\b("
     r"dvd|blu[\s-]?ray|bluray|4k|uhd|ultra\s?hd|vhs|digital\s?copy|steelbook|"
-    r"widescreen|full\s?screen|fullscreen|remastered|"
+    r"widescreen|full\s?screen|fullscreen|remastered|complete\s+series|"
     r"(?:special|collector\'?s|deluxe|limited|anniversary|extended|unrated|director\'?s)"
     r"\s+(?:edition|cut)|"
     r"\d+\s*-?\s*disc(?:\s+set)?"
@@ -541,7 +545,19 @@ _OMDB_TITLE_NOISE = re.compile(
     re.IGNORECASE,
 )
 
+# Placeholder written by lookup_metadata() when no provider matched the barcode.
+# Manually corrected rows keep it in title_raw forever, so it must never reach OMDb.
 _PLACEHOLDER_TITLES = {"unknown item", "unknown", ""}
+
+# A colon prefix is a last-resort candidate: discs often carry a broadcast
+# subtitle OMDb doesn't use ("The Blue Planet: Seas of Life"). Guarded so a
+# short prefix can't silently match a different title ("Alien: Covenant").
+_PREFIX_STOPWORDS = {"the", "a", "an"}
+_MIN_PREFIX_WORDS = 2
+_MIN_PREFIX_CHARS = 8
+
+# Ceiling on lookups per enrich: candidates x years, plus one search each.
+_MAX_TITLE_CANDIDATES = 3
 
 
 def _clean_movie_title(raw: str | None) -> str | None:
@@ -553,20 +569,43 @@ def _clean_movie_title(raw: str | None) -> str | None:
     return s or None
 
 
+def _colon_prefix(raw: str | None) -> str | None:
+    if not raw or ":" not in str(raw):
+        return None
+    head = " ".join(str(raw).split(":", 1)[0].split()).strip(" -\u2013\u2014:,.")
+    if not head:
+        return None
+    significant = [w for w in head.split() if w.lower() not in _PREFIX_STOPWORDS]
+    if len(significant) < _MIN_PREFIX_WORDS and len(head) < _MIN_PREFIX_CHARS:
+        return None
+    return head
+
+
 def _title_candidates(*titles: str | None) -> list[str]:
+    """Ordered, de-duplicated candidates, most precise first: as given, then
+    noise-stripped, then colon prefixes. Placeholders are dropped."""
     out: list[str] = []
     seen: set[str] = set()
+
+    def push(cand: str | None) -> None:
+        if not cand:
+            return
+        c = " ".join(str(cand).split())
+        key = c.lower()
+        if not c or key in seen or key in _PLACEHOLDER_TITLES:
+            return
+        seen.add(key)
+        out.append(c)
+
     for raw in titles:
-        for cand in (raw, _clean_movie_title(raw)):
-            if not cand:
-                continue
-            c = " ".join(str(cand).split())
-            key = c.lower()
-            if not c or key in seen or key in _PLACEHOLDER_TITLES:
-                continue
-            seen.add(key)
-            out.append(c)
-    return out
+        push(raw)
+    for raw in titles:
+        push(_clean_movie_title(raw))
+    for raw in titles:
+        push(_colon_prefix(raw))
+        push(_colon_prefix(_clean_movie_title(raw)))
+
+    return out[:_MAX_TITLE_CANDIDATES]
 
 
 def _omdb_request(params: dict[str, Any]) -> dict[str, Any]:
@@ -593,13 +632,26 @@ def _omdb_ok(data: dict[str, Any]) -> bool:
     return str(data.get("Response", "")).lower() == "true"
 
 
-def _pick_search_result(results: list[dict[str, Any]], year: int | None) -> dict[str, Any]:
+def _pick_search_result(
+    results: list[dict[str, Any]], year: int | None, wanted: str | None = None
+) -> dict[str, Any]:
+    """Choose among ?s= hits. Position is the weakest signal and is used last:
+    a broad search returns dozens of rows and an unrelated one can lead."""
+    pool = results
+
+    if wanted:
+        w = " ".join(str(wanted).split()).lower()
+        exact = [r for r in pool if " ".join(str(r.get("Title") or "").split()).lower() == w]
+        if exact:
+            pool = exact
+
     if year:
-        for r in results:
+        for r in pool:
             ry = str(r.get("Year") or "")[:4]
             if ry.isdigit() and int(ry) == int(year):
                 return r
-    return results[0]
+
+    return pool[0]
 
 
 def omdb_fetch_movie(
@@ -608,19 +660,21 @@ def omdb_fetch_movie(
     title: str | None,
     year: int | None,
     title_raw: str | None = None,
+    omdb_type: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
-    Resolve a title against OMDb, widening the query one constraint at a time:
+    Resolve a title against OMDb:
       1. imdb_id (exact)
-      2. exact title (?t=), narrowest first: +year +type=movie -> +year -> +type -> bare
-      3. cleaned title variants, same ladder
-      4. fuzzy search (?s=), movie-typed then untyped -> best imdbID -> exact fetch
+      2. exact title (?t=) with year, then without
+      3. noise-stripped / colon-prefix variants, same ladder
+      4. fuzzy search (?s=) -> best imdbID -> exact fetch
 
-    type=movie is tried first for precision, then dropped: OMDb classifies
-    documentaries, mini-series and box sets as "series", and the type filter
-    makes those return "Movie not found!" despite an exact title match.
+    omdb_type comes straight from the row's media_type ("movie" or "series")
+    and constrains every request. It is never guessed: hardcoding movie hid
+    documentaries and box sets OMDb files as series, and trying both doubled
+    the request count. A mislabelled row is fixed by changing its media_type.
 
-    Returns (omdb_payload, debug) where debug records every attempt.
+    Returns (payload, debug) where debug records every attempt.
     """
     if not OMDB_API_KEY:
         raise HTTPException(status_code=500, detail="OMDB_API_KEY not set")
@@ -643,50 +697,45 @@ def omdb_fetch_movie(
         )
 
     years: list[int | None] = [year, None] if year else [None]
-    types: list[str | None] = ["movie", None]
 
     for cand in candidates:
         for y in years:
-            for t in types:
-                params: dict[str, Any] = {"t": cand, "plot": "short"}
-                if y:
-                    params["y"] = int(y)
-                if t:
-                    params["type"] = t
-                data = _omdb_request(params)
-                attempts.append({
-                    "strategy": "title", "value": cand, "year": y, "type": t,
-                    "ok": _omdb_ok(data), "error": data.get("Error"),
-                })
-                if _omdb_ok(data):
-                    return data, {"attempts": attempts}
-                last = data
-
-    for cand in candidates:
-        for t in types:
-            params = {"s": cand}
-            if t:
-                params["type"] = t
-            search = _omdb_request(params)
-            results = search.get("Search") or []
+            params: dict[str, Any] = {"t": cand, "plot": "short"}
+            if y:
+                params["y"] = int(y)
+            if omdb_type:
+                params["type"] = omdb_type
+            data = _omdb_request(params)
             attempts.append({
-                "strategy": "search", "value": cand, "type": t, "ok": _omdb_ok(search),
-                "results": len(results), "error": search.get("Error"),
-            })
-            if not (_omdb_ok(search) and results):
-                continue
-
-            best_id = (_pick_search_result(results, year).get("imdbID") or "").strip()
-            if not best_id:
-                continue
-
-            data = _omdb_request({"i": best_id, "plot": "short"})
-            attempts.append({
-                "strategy": "search_imdb_id", "value": best_id, "ok": _omdb_ok(data)
+                "strategy": "title", "value": cand, "year": y, "type": omdb_type,
+                "ok": _omdb_ok(data), "error": data.get("Error"),
             })
             if _omdb_ok(data):
                 return data, {"attempts": attempts}
             last = data
+
+    for cand in candidates:
+        search_params: dict[str, Any] = {"s": cand}
+        if omdb_type:
+            search_params["type"] = omdb_type
+        search = _omdb_request(search_params)
+        results = search.get("Search") or []
+        attempts.append({
+            "strategy": "search", "value": cand, "type": omdb_type,
+            "ok": _omdb_ok(search), "results": len(results), "error": search.get("Error"),
+        })
+        if not (_omdb_ok(search) and results):
+            continue
+
+        best_id = (_pick_search_result(results, year, cand).get("imdbID") or "").strip()
+        if not best_id:
+            continue
+
+        data = _omdb_request({"i": best_id, "plot": "short"})
+        attempts.append({"strategy": "search_imdb_id", "value": best_id, "ok": _omdb_ok(data)})
+        if _omdb_ok(data):
+            return data, {"attempts": attempts}
+        last = data
 
     return (last or {"Response": "False", "Error": "Movie not found!"}), {"attempts": attempts}
 
@@ -757,7 +806,7 @@ def scan_barcode(req: ScanRequest, db: sqlite3.Connection = Depends(get_db)) -> 
     }
 
 
-_MANUAL_MEDIA_TYPES = {"book", "movie", "game"}
+_MANUAL_MEDIA_TYPES = {"book", "movie", "series", "game"}
 
 
 @app.post("/media/manual")
@@ -917,6 +966,9 @@ def update_media(
     if "igdb_last_enriched_at" in patch.model_fields_set:
         add("igdb_last_enriched_at", patch.igdb_last_enriched_at)
 
+    if "omdb_imdb_id" in patch.model_fields_set:
+        add("omdb_imdb_id", (patch.omdb_imdb_id or "").strip() or None)
+
     if patch.notes is not None:
         add("notes", patch.notes)
 
@@ -953,9 +1005,19 @@ def delete_media(item_id: int, db: sqlite3.Connection = Depends(get_db)) -> dict
 _PROVIDERS = {"omdb", "igdb"}
 
 
+# OMDb covers both films and episodic titles; "series" is a media_type in its
+# own right so the same value that classifies the shelf also constrains the
+# lookup, instead of a second provider-specific enum shadowing it.
+_OMDB_MEDIA_TYPES = {"movie", "series"}
+
+
+def _is_omdb_media_type(media_type: str | None) -> bool:
+    return (media_type or "").strip().lower() in _OMDB_MEDIA_TYPES
+
+
 def _infer_provider(media_type: str | None) -> str | None:
     mt = (media_type or "").strip().lower()
-    if mt == "movie":
+    if _is_omdb_media_type(mt):
         return "omdb"
     if _is_game_media_type(mt):
         return "igdb"
@@ -969,6 +1031,8 @@ def _enrich_via_omdb(
         return {"status": "skipped", "reason": "already_ok", "item": item}
 
     imdb_id = (item.get("omdb_imdb_id") or "").strip() or None
+    # Prefer the curated title: title_raw is a scan-time snapshot and holds the
+    # "Unknown Item" placeholder on every row corrected by hand after a failed scan.
     title = (item.get("title") or "").strip() or None
     title_raw = (item.get("title_raw") or "").strip() or None
     year = item.get("release_year")
@@ -978,7 +1042,11 @@ def _enrich_via_omdb(
         year_i = None
 
     data, omdb_debug = omdb_fetch_movie(
-        imdb_id=imdb_id, title=title, year=year_i, title_raw=title_raw
+        imdb_id=imdb_id,
+        title=title,
+        year=year_i,
+        title_raw=title_raw,
+        omdb_type=(item.get("media_type") or "").strip().lower() or None,
     )
 
     if str(data.get("Response", "")).lower() == "true":
@@ -1031,9 +1099,7 @@ def _enrich_via_omdb(
     db.commit()
 
     if status != "ok":
-        logger.info(
-            "OMDb unresolved media_id=%s attempts=%s", item_id, omdb_debug["attempts"]
-        )
+        logger.info("OMDb unresolved media_id=%s attempts=%s", item_id, omdb_debug["attempts"])
 
     row2 = db.execute(MEDIA_SELECT + " WHERE id = ?", (item_id,)).fetchone()
     result: dict[str, Any] = {"status": status, "reason": reason, "item": dict(row2) if row2 else item}
@@ -1162,6 +1228,8 @@ def _media_type_sql_values(media_type: str) -> tuple[str, list[Any]]:
         return "LOWER(TRIM(media_type)) = 'book'", []
     if mt in {"movie", "movies"}:
         return "LOWER(TRIM(media_type)) = 'movie'", []
+    if mt in {"series", "tv", "show", "shows"}:
+        return "LOWER(TRIM(media_type)) = 'series'", []
     if mt in {"game", "games", "video_game", "video game", "video games", "videogame", "videogames"}:
         return "LOWER(TRIM(media_type)) IN ('game', 'video game', 'videogame')", []
     # fallback: exact match provided

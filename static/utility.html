@@ -306,7 +306,8 @@
     }
 
     function isBook(r) { return mtLower(r) === "book"; }
-    function isMovie(r) { return mtLower(r) === "movie"; }
+    // OMDb-backed rows: films and episodic titles share the same enrich path.
+    function isMovie(r) { const t = mtLower(r); return t === "movie" || t === "series"; }
     // main.py can infer "game" from UPC; some manual entries may be "video_game"
     function isGame(r) {
       const v = mtLower(r);

@@ -249,7 +249,7 @@
 
     function shouldShowOmdb(item) {
       const mt = String(item?.media_type || "unknown").toLowerCase().trim();
-      if (mt !== "movie") return false;
+      if (mt !== "movie" && mt !== "series") return false;
       const status = String(item?.omdb_status || "").toLowerCase().trim();
       return status !== "ok";
     }

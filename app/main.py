@@ -509,7 +509,7 @@ def lookup_metadata(barcode: str) -> tuple[str, str, str, str | None, str, str |
         return (
             title or "Unknown Item",
             inferred or "unknown",
-            "upcdatabase" if UPCDATABASE_API_KEY else "none",
+            "upcdatabase" if (title and UPCDATABASE_API_KEY) else "none",
             json.dumps(payload) if payload else None,
             json.dumps(meta),
             None,
@@ -547,7 +547,7 @@ _OMDB_TITLE_NOISE = re.compile(
 
 # Placeholder written by lookup_metadata() when no provider matched the barcode.
 # Manually corrected rows keep it in title_raw forever, so it must never reach OMDb.
-_PLACEHOLDER_TITLES = {"unknown item", "unknown", ""}
+_PLACEHOLDER_TITLES = {"unknown item", "unknown book", "unknown", ""}
 
 # A colon prefix is a last-resort candidate: discs often carry a broadcast
 # subtitle OMDb doesn't use ("The Blue Planet: Seas of Life"). Guarded so a
@@ -764,8 +764,11 @@ def scan_barcode(req: ScanRequest, db: sqlite3.Connection = Depends(get_db)) -> 
 
     title, media_type, source, source_payload, lookup_debug, author = lookup_metadata(normalized)
 
-    # Store raw title separately so you can clean title later without losing original
-    title_raw = title
+    # Store raw title separately so title can be cleaned later without losing the
+    # original -- but only when a provider actually returned one. Persisting the
+    # display placeholder made every hand-corrected row look like it had real
+    # lookup data, which then got sent to OMDb as the search term.
+    title_raw = None if title.strip().lower() in _PLACEHOLDER_TITLES else title
 
     try:
         cur = db.cursor()

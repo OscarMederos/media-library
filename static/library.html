@@ -105,6 +105,16 @@
       padding-bottom: calc(.6rem + env(safe-area-inset-bottom));
     }
 
+    .stars { display:flex; align-items:center; gap:.25rem; flex-wrap:wrap; }
+    .star {
+      background:#2a2a2a; color:#666; border:0; border-radius:8px;
+      font-size:1.35rem; line-height:1; padding:.3rem .45rem; cursor:pointer;
+    }
+    .star.on { color:#ffb300; }
+    .clearStars { background:#444; color:#fff; font-size:.85rem; padding:.4rem .6rem; margin-left:.35rem; }
+    .clearStars[disabled] { opacity:.4; cursor:default; }
+    .rating { color:#ffb300; font-size:.9rem; letter-spacing:.05em; margin-left:.4rem; }
+
     .save { background:#4caf50; color:#000; }
     .cancel { background:#444; color:#fff; }
     .note { color:#aaa; font-size:.9rem; margin-top:.3rem; }
@@ -231,9 +241,21 @@
             </select>
           </div>
           <div>
-            <label>Cover URL</label>
-            <input id="mCoverUrl" placeholder="https://…" />
+            <label>My rating</label>
+            <div class="stars" id="mRating">
+              <button type="button" class="star" data-value="1" aria-label="1 star">★</button>
+              <button type="button" class="star" data-value="2" aria-label="2 stars">★</button>
+              <button type="button" class="star" data-value="3" aria-label="3 stars">★</button>
+              <button type="button" class="star" data-value="4" aria-label="4 stars">★</button>
+              <button type="button" class="star" data-value="5" aria-label="5 stars">★</button>
+              <button type="button" class="clearStars" id="mRatingClear">Clear</button>
+            </div>
           </div>
+        </div>
+
+        <div>
+          <label>Cover URL</label>
+          <input id="mCoverUrl" placeholder="https://…" />
         </div>
 
         <div>
@@ -282,6 +304,9 @@
     const mYear = document.getElementById("mYear");
     const mLocation = document.getElementById("mLocation");
     const mStatus = document.getElementById("mStatus");
+    const mRating = document.getElementById("mRating");
+    const mRatingClear = document.getElementById("mRatingClear");
+    const starButtons = Array.from(mRating.querySelectorAll(".star"));
     const mCoverUrl = document.getElementById("mCoverUrl");
     const mNotes = document.getElementById("mNotes");
     const mMeta = document.getElementById("mMeta");
@@ -292,6 +317,7 @@
     let currentItems = [];
     let totalCount = 0;
     let editingItem = null;
+    let mRatingValue = null;   // null = unrated, otherwise 1-5
 
     function idEq(a, b) { return String(a) === String(b); }
 
@@ -314,8 +340,31 @@
     }
 
     function fmt(v) { return (v === null || v === undefined || v === "") ? "—" : String(v); }
+
     function norm(s) { return String(s ?? "").toLowerCase().trim(); }
     function isBlank(v) { return v === null || v === undefined || String(v).trim() === ""; }
+
+    // Coerce whatever the API gave us into null or an integer 1-5.
+    function normRating(v) {
+      const n = Number(v);
+      return (Number.isInteger(n) && n >= 1 && n <= 5) ? n : null;
+    }
+
+    // Safe to build with innerHTML: the only interpolated value is an integer
+    // that normRating() has already validated.
+    function ratingBadge(v) {
+      const n = normRating(v);
+      if (n === null) return "";
+      return `<span class="rating" title="${n} of 5">${"★".repeat(n)}${"☆".repeat(5 - n)}</span>`;
+    }
+
+    function renderStars() {
+      for (const b of starButtons) {
+        const v = Number(b.dataset.value);
+        b.classList.toggle("on", mRatingValue !== null && v <= mRatingValue);
+      }
+      mRatingClear.disabled = (mRatingValue === null);
+    }
 
     function updateExtraUI() {
       const t = filterEl.value;
@@ -505,7 +554,7 @@
           : "";
 
         div.innerHTML = `
-          <div class="title">${escapeHtml(item.title)}</div>
+          <div class="title">${escapeHtml(item.title)}${ratingBadge(item.rating)}</div>
           <div class="meta">${escapeHtml(type)}${escapeHtml(author)}${escapeHtml(dev)}${escapeHtml(plat)}${escapeHtml(fmtStr)}${escapeHtml(yr)}${escapeHtml(director)}</div>
           <div class="submeta">barcode: ${escapeHtml(item.barcode)} • id:${escapeHtml(item.id)}${escapeHtml(loc)}${escapeHtml(st)}</div>
           <div class="actions">
@@ -631,6 +680,9 @@
       mLocation.value = item.location ?? "";
       mStatus.value = item.status ?? "";
 
+      mRatingValue = normRating(item.rating);
+      renderStars();
+
       mCoverUrl.value = item.cover_url ?? "";
       mNotes.value = item.notes ?? "";
 
@@ -695,6 +747,7 @@
         format: mFormat.value,
         location: mLocation.value,
         status: mStatus.value,
+        rating: mRatingValue,
         release_year: yearVal ? parseInt(yearVal, 10) : null,
         cover_url: mCoverUrl.value,
         notes: mNotes.value,
@@ -768,6 +821,16 @@
     });
 
     mType.addEventListener("change", updateModalVisibility);
+
+    for (const b of starButtons) {
+      b.addEventListener("click", () => {
+        const v = Number(b.dataset.value);
+        // Tapping the current rating again clears it — saves a trip to "Clear".
+        mRatingValue = (mRatingValue === v) ? null : v;
+        renderStars();
+      });
+    }
+    mRatingClear.addEventListener("click", () => { mRatingValue = null; renderStars(); });
 
     // Earlier versions of this app installed a service worker (media/sq.js)
     // and cached the media list in localStorage. Both are gone now — this

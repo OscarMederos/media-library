@@ -13,7 +13,7 @@ from typing import Any
 import requests
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, fields
 
 from igdb_enrich import (
     IgdbClient,
@@ -136,6 +136,7 @@ def init_db() -> None:
             format TEXT,
             location TEXT,
             status TEXT,
+            rating INTEGER,
             release_year INTEGER,
             cover_url TEXT,
 
@@ -165,6 +166,7 @@ def init_db() -> None:
     _ensure_column(db, "media", "format", "ALTER TABLE media ADD COLUMN format TEXT")
     _ensure_column(db, "media", "location", "ALTER TABLE media ADD COLUMN location TEXT")
     _ensure_column(db, "media", "status", "ALTER TABLE media ADD COLUMN status TEXT")
+    _ensure_column(db, "media", "rating", "ALTER TABLE media ADD COLUMN rating INTEGER")
     _ensure_column(db, "media", "release_year", "ALTER TABLE media ADD COLUMN release_year INTEGER")
     _ensure_column(db, "media", "cover_url", "ALTER TABLE media ADD COLUMN cover_url TEXT")
     _ensure_column(db, "media", "notes", "ALTER TABLE media ADD COLUMN notes TEXT")
@@ -200,7 +202,7 @@ MEDIA_SELECT = """
 SELECT
   id, barcode,
   title, title_raw, media_type,
-  author, platform, format, location, status, release_year, cover_url,
+  author, platform, format, location, status, rating, release_year, cover_url,
   developer,
   notes,
   source, source_payload,
@@ -243,6 +245,7 @@ class MediaUpdate(BaseModel):
     format: str | None = None
     location: str | None = None
     status: str | None = None
+    rating: int | Field(None, ge=1, le=5)
     release_year: int | None = None
     cover_url: str | None = None
     developer: str | None = None
@@ -954,6 +957,8 @@ def update_media(
         add("location", patch.location)
     if patch.status is not None:
         add("status", patch.status)
+    if "rating" in patch.model_fields_set:
+        add("rating", patch.rating)    
     if patch.release_year is not None:
         add("release_year", patch.release_year)
     if patch.cover_url is not None:

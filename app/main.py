@@ -13,7 +13,7 @@ from typing import Any
 import requests
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, fields
+from pydantic import BaseModel, Field
 
 from igdb_enrich import (
     IgdbClient,
@@ -245,7 +245,7 @@ class MediaUpdate(BaseModel):
     format: str | None = None
     location: str | None = None
     status: str | None = None
-    rating: int | Field(None, ge=1, le=5)
+    rating: int | None = Field(None, ge=1, le=5)
     release_year: int | None = None
     cover_url: str | None = None
     developer: str | None = None
